@@ -1,22 +1,24 @@
-// Global type definitions
-
 export interface User {
   id: string;
   email: string;
   username: string;
-  avatar?: string;
-  createdAt: string;
+  avatar_url?: string;
+  avg_pace?: number;
+  total_runs: number;
+  total_miles: number;
+  created_at: string;
 }
 
 export interface Runner {
   id: string;
-  userId: string;
+  user_id: string;
   latitude: number;
   longitude: number;
-  pace: number;
+  pace?: number;
   direction: number;
-  isActive: boolean;
-  lastUpdate: string;
+  is_active: boolean;
+  last_update: string;
+  user?: User;
 }
 
 export interface Match {
@@ -33,4 +35,14 @@ export interface Location {
   longitude: number;
   accuracy?: number;
   timestamp: number;
+}
+
+export interface Run {
+  id: string;
+  user_id: string;
+  name: string;
+  distance: number;
+  duration: string;
+  pace: string;
+  date: string;
 }
