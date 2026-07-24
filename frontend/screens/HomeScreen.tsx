@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,26 +12,112 @@ import GlassCard from '../components/GlassCard';
 import OnlineToggleButton from '../components/OnlineToggleButton';
 import LeafletMap from '../components/LeafletMap';
 import { useLocation } from '../hooks/useLocation';
+import { useAuth } from '../hooks/useAuth';
+import { supabase } from '../services/supabaseClient';
+import { getDistanceMiles, formatDistanceMiles } from '../utils/distance';
 
-const DEMO_RUNNERS = [
-  { id: '1', username: 'SARAH', latitude: 1.3021, longitude: 103.8198, pace: "8'10\"", distance: '0.5 mi' },
-  { id: '2', username: 'MARCUS', latitude: 1.2975, longitude: 103.8550, pace: "7'20\"", distance: '0.8 mi' },
-  { id: '3', username: 'ALEX', latitude: 1.2998, longitude: 103.8374, pace: "7'45\"", distance: '0.2 mi' },
-];
+interface RemoteRunner {
+  id: string;
+  username: string;
+  latitude: number;
+  longitude: number;
+  pace: number | null;
+}
+
+interface RunnerRow {
+  user_id: string;
+  latitude: number;
+  longitude: number;
+  pace: number | null;
+  user: { username: string } | null;
+}
 
 const HomeScreen: React.FC = () => {
-  const [isOnline, setIsOnline] = useState(false);
-  const [selectedRunner, setSelectedRunner] = useState<typeof DEMO_RUNNERS[number] | null>(null);
-  const [runnerCount] = useState(5);
+  const { session } = useAuth();
   const { location: userLocation } = useLocation();
+  const [isOnline, setIsOnline] = useState(false);
+  const [selectedRunnerId, setSelectedRunnerId] = useState<string | null>(null);
+  const [remoteRunners, setRemoteRunners] = useState<RemoteRunner[]>([]);
+  const hasSyncedLocationRef = useRef(false);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+
+    (async () => {
+      const { data } = await supabase
+        .from('runners')
+        .select('user_id, latitude, longitude, pace, user:users(username)')
+        .eq('is_active', true)
+        .neq('user_id', session.user.id);
+
+      if (cancelled || !data) return;
+
+      const rows = data as unknown as RunnerRow[];
+      setRemoteRunners(
+        rows
+          .filter((r) => r.user)
+          .map((r) => ({
+            id: r.user_id,
+            username: r.user!.username,
+            latitude: r.latitude,
+            longitude: r.longitude,
+            pace: r.pace,
+          }))
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (!session || !userLocation || hasSyncedLocationRef.current) return;
+    hasSyncedLocationRef.current = true;
+
+    supabase.from('runners').upsert(
+      {
+        user_id: session.user.id,
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        is_active: isOnline,
+        last_update: new Date().toISOString(),
+      },
+      { onConflict: 'user_id' }
+    );
+  }, [session, userLocation]);
+
+  const runners = useMemo(
+    () =>
+      remoteRunners.map((r) => ({
+        id: r.id,
+        username: r.username,
+        latitude: r.latitude,
+        longitude: r.longitude,
+        pace: r.pace != null ? String(r.pace) : '--',
+        distance: userLocation
+          ? formatDistanceMiles(getDistanceMiles(userLocation, r))
+          : '--',
+      })),
+    [remoteRunners, userLocation]
+  );
+
+  const selectedRunner = runners.find((r) => r.id === selectedRunnerId) ?? null;
 
   const handleRunnerPress = (id: string) => {
-    const runner = DEMO_RUNNERS.find((r) => r.id === id);
-    if (runner) setSelectedRunner(runner);
+    setSelectedRunnerId(id);
   };
 
   const handleMapPress = () => {
-    setSelectedRunner(null);
+    setSelectedRunnerId(null);
+  };
+
+  const handleToggleOnline = async () => {
+    const next = !isOnline;
+    setIsOnline(next);
+    if (!session) return;
+    await supabase.from('runners').update({ is_active: next }).eq('user_id', session.user.id);
   };
 
   return (
@@ -39,8 +125,8 @@ const HomeScreen: React.FC = () => {
       <TopBar />
 
       <LeafletMap
-        runners={DEMO_RUNNERS}
-        selectedRunnerId={selectedRunner?.id ?? null}
+        runners={runners}
+        selectedRunnerId={selectedRunnerId}
         onRunnerPress={handleRunnerPress}
         onMapPress={handleMapPress}
         userLocation={userLocation}
@@ -48,14 +134,14 @@ const HomeScreen: React.FC = () => {
 
       <OnlineToggleButton
         isOnline={isOnline}
-        onToggle={() => setIsOnline((prev) => !prev)}
+        onToggle={handleToggleOnline}
         style={styles.toggleButton}
       />
 
       <View style={styles.chipContainer}>
         <View style={styles.chip}>
           <View style={styles.chipDot} />
-          <Text style={styles.chipText}>{runnerCount} RUNNERS NEARBY</Text>
+          <Text style={styles.chipText}>{runners.length} RUNNERS NEARBY</Text>
         </View>
       </View>
 
@@ -69,37 +155,15 @@ const HomeScreen: React.FC = () => {
                 </Text>
               </View>
               <View>
-                <View style={styles.cardNameRow}>
-                  <Text style={styles.cardName}>{selectedRunner.username}</Text>
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>PRO COACH</Text>
-                  </View>
-                </View>
+                <Text style={styles.cardName}>{selectedRunner.username}</Text>
                 <Text style={styles.cardDistance}>
-                  {selectedRunner.distance} away • Active Now
+                  {selectedRunner.distance} away • Online
                 </Text>
               </View>
             </View>
             <View style={styles.cardPace}>
               <Text style={styles.paceLabel}>PACE</Text>
               <Text style={styles.paceValue}>{selectedRunner.pace}</Text>
-            </View>
-          </View>
-
-          <View style={styles.statsRow}>
-            <View style={styles.statBox}>
-              <Text style={styles.statLabel}>STREAK</Text>
-              <View style={styles.statValueRow}>
-                <Text style={styles.statIcon}>🔥</Text>
-                <Text style={styles.statValue}>12 Days</Text>
-              </View>
-            </View>
-            <View style={styles.statBox}>
-              <Text style={styles.statLabel}>GOAL</Text>
-              <View style={styles.statValueRow}>
-                <Text style={styles.statIcon}>📈</Text>
-                <Text style={styles.statValue}>5k Run</Text>
-              </View>
             </View>
           </View>
 
@@ -188,26 +252,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.primary,
   },
-  cardNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
   cardName: {
     fontSize: 20,
     fontWeight: '600',
     color: Colors.primary,
-  },
-  badge: {
-    backgroundColor: 'rgba(195, 244, 0, 0.1)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: Colors.primaryContainer,
   },
   cardDistance: {
     fontSize: 14,
@@ -227,38 +275,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '600',
     color: Colors.primaryContainer,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 16,
-  },
-  statBox: {
-    flex: 1,
-    backgroundColor: 'rgba(41, 42, 46, 0.5)',
-    borderRadius: BorderRadius.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(68, 73, 51, 0.3)',
-    padding: 12,
-  },
-  statLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: Colors.onSurfaceVariant,
-    marginBottom: 4,
-  },
-  statValueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  statIcon: {
-    fontSize: 16,
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: Colors.primary,
   },
   inviteButton: {
     flexDirection: 'row',

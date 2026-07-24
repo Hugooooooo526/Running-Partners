@@ -9,26 +9,23 @@ import {
 import { Colors, Spacing, BorderRadius } from '../theme';
 import TopBar from '../components/TopBar';
 import StatCard from '../components/StatCard';
-import GlassCard from '../components/GlassCard';
-
-const RECENT_RUNS = [
-  {
-    id: '1',
-    name: 'Morning Tempo Run',
-    distance: '6.2 mi',
-    duration: '48:12',
-    pace: '7\'46"/mi',
-  },
-  {
-    id: '2',
-    name: 'Recovery Beach Trail',
-    distance: '4.0 mi',
-    duration: '35:00',
-    pace: '8\'45"/mi',
-  },
-];
+import { useAuth } from '../hooks/useAuth';
 
 const ProfileScreen: React.FC = () => {
+  const { profile, signOut } = useAuth();
+
+  if (!profile) {
+    return (
+      <View style={styles.container}>
+        <TopBar />
+      </View>
+    );
+  }
+
+  const joinDate = new Date(profile.created_at)
+    .toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+    .toUpperCase();
+
   return (
     <View style={styles.container}>
       <TopBar />
@@ -41,33 +38,25 @@ const ProfileScreen: React.FC = () => {
         <View style={styles.avatarSection}>
           <View style={styles.avatarWrapper}>
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>ER</Text>
+              <Text style={styles.avatarText}>{profile.username[0].toUpperCase()}</Text>
             </View>
-            <TouchableOpacity style={styles.editButton} activeOpacity={0.8}>
-              <Text style={styles.editIcon}>✏️</Text>
-            </TouchableOpacity>
           </View>
 
-          <Text style={styles.username}>EliteRunner99</Text>
-          <View style={styles.badgeRow}>
-            <View style={styles.proBadge}>
-              <Text style={styles.proBadgeText}>PRO MEMBER</Text>
-            </View>
-            <Text style={styles.joinDate}>• JOINED JAN 2023</Text>
-          </View>
+          <Text style={styles.username}>{profile.username}</Text>
+          <Text style={styles.joinDate}>JOINED {joinDate}</Text>
         </View>
 
         <View style={styles.statsGrid}>
           <StatCard
             label="TOTAL RUNS"
-            value="142"
-            subtitle="+12 THIS MONTH"
+            value={String(profile.total_runs)}
+            subtitle="LIFETIME TOTAL"
             icon="🏃"
             wide
           />
           <StatCard
             label="TOTAL MILES"
-            value="1,248"
+            value={profile.total_miles.toLocaleString()}
             subtitle="LIFETIME VOLUME"
             icon="🗺️"
             wide
@@ -78,45 +67,29 @@ const ProfileScreen: React.FC = () => {
               <Text style={styles.paceIcon}>⚡</Text>
             </View>
             <View style={styles.paceValueRow}>
-              <Text style={styles.paceValue}>7'42"</Text>
-              <Text style={styles.paceUnit}>/mi</Text>
+              <Text style={styles.paceValue}>{profile.avg_pace ? profile.avg_pace : '--'}</Text>
+              {profile.avg_pace != null && <Text style={styles.paceUnit}>/mi</Text>}
             </View>
           </View>
         </View>
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Runs</Text>
-          <TouchableOpacity activeOpacity={0.7}>
-            <Text style={styles.seeAll}>SEE ALL</Text>
-          </TouchableOpacity>
         </View>
 
-        <View style={styles.runsList}>
-          {RECENT_RUNS.map((run, index) => (
-            <TouchableOpacity
-              key={run.id}
-              activeOpacity={0.8}
-              style={[styles.runCard, index === 1 && styles.runCardFaded]}
-            >
-              <View style={styles.runThumbnail}>
-                <Text style={styles.runThumbnailIcon}>📍</Text>
-              </View>
-              <View style={styles.runInfo}>
-                <Text style={styles.runName}>{run.name}</Text>
-                <View style={styles.runStats}>
-                  <Text style={styles.runStat}>{run.distance}</Text>
-                  <Text style={styles.runStat}>{run.duration}</Text>
-                  <Text style={styles.runStat}>{run.pace}</Text>
-                </View>
-              </View>
-              <Text style={styles.runChevron}>›</Text>
-            </TouchableOpacity>
-          ))}
+        <View style={styles.emptyRuns}>
+          <Text style={styles.emptyRunsIcon}>📍</Text>
+          <Text style={styles.emptyRunsText}>No runs logged yet</Text>
+          <Text style={styles.emptyRunsSubtext}>Log your first run to see it here</Text>
         </View>
 
         <TouchableOpacity style={styles.logButton} activeOpacity={0.8}>
           <Text style={styles.logButtonIcon}>➕</Text>
           <Text style={styles.logButtonText}>LOG NEW ACTIVITY</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.logoutButton} activeOpacity={0.8} onPress={signOut}>
+          <Text style={styles.logoutButtonText}>LOG OUT</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -167,41 +140,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.primary,
   },
-  editButton: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: Colors.primaryContainer,
-    borderRadius: 20,
-    padding: 8,
-    borderWidth: 3,
-    borderColor: Colors.background,
-  },
-  editIcon: {
-    fontSize: 14,
-  },
   username: {
     fontSize: 28,
     fontWeight: '700',
     color: Colors.primary,
     marginBottom: 8,
-  },
-  badgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  proBadge: {
-    backgroundColor: 'rgba(195, 244, 0, 0.1)',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: BorderRadius.full,
-  },
-  proBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: Colors.primaryFixedDim,
-    letterSpacing: 0.5,
   },
   joinDate: {
     fontSize: 10,
@@ -268,61 +211,29 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.primary,
   },
-  seeAll: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.primaryContainer,
-    letterSpacing: 0.5,
-  },
-  runsList: {
-    gap: 12,
-  },
-  runCard: {
-    flexDirection: 'row',
+  emptyRuns: {
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'rgba(26, 26, 26, 0.8)',
     borderWidth: 1,
     borderColor: 'rgba(44, 44, 46, 0.5)',
     borderRadius: BorderRadius.lg,
-    padding: 16,
-    marginBottom: 4,
+    paddingVertical: 32,
   },
-  runCardFaded: {
-    opacity: 0.8,
+  emptyRunsIcon: {
+    fontSize: 28,
+    marginBottom: 8,
+    opacity: 0.5,
   },
-  runThumbnail: {
-    width: 64,
-    height: 64,
-    borderRadius: BorderRadius.lg,
-    backgroundColor: Colors.surfaceContainerHigh,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  runThumbnailIcon: {
-    fontSize: 24,
-  },
-  runInfo: {
-    flex: 1,
-  },
-  runName: {
+  emptyRunsText: {
     fontSize: 16,
     fontWeight: '700',
-    color: Colors.primary,
-    marginBottom: 4,
+    color: Colors.onSurface,
   },
-  runStats: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  runStat: {
-    fontSize: 14,
+  emptyRunsSubtext: {
+    fontSize: 13,
     color: Colors.onSurfaceVariant,
-  },
-  runChevron: {
-    fontSize: 24,
-    color: Colors.onSurfaceVariant,
-    opacity: 0.4,
+    marginTop: 4,
   },
   logButton: {
     flexDirection: 'row',
@@ -341,6 +252,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: Colors.onPrimaryContainer,
+    letterSpacing: 0.5,
+  },
+  logoutButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: Spacing.touchTarget,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.surfaceVariant,
+    backgroundColor: 'rgba(30, 31, 35, 0.8)',
+    marginTop: 12,
+    marginBottom: 24,
+  },
+  logoutButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.onSurfaceVariant,
     letterSpacing: 0.5,
   },
 });
