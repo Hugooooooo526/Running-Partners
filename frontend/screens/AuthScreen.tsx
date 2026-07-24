@@ -72,7 +72,7 @@ const AuthScreen: React.FC = () => {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.content}>
-        <Text style={styles.title}>SMART MATCH</Text>
+        <Text style={styles.title}>RUNNING PARTNERS</Text>
         <Text style={styles.subtitle}>
           {mode === 'signin' ? 'Welcome back' : 'Create your account'}
         </Text>

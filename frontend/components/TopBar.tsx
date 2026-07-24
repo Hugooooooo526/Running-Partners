@@ -18,7 +18,7 @@ const TopBar: React.FC<TopBarProps> = ({ onMenuPress, onNotificationsPress }) =>
         <Text style={styles.icon}>☰</Text>
       </TouchableOpacity>
 
-      <Text style={styles.title}>ELITE COACH</Text>
+      <Text style={styles.title}>RUNNING PARTNERS</Text>
 
       <TouchableOpacity
         style={styles.iconButton}
