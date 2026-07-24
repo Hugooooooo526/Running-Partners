@@ -96,6 +96,10 @@ const MAP_HTML = `
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'runnerPress', id: id }));
     }
 
+    window.flyToRunner = function(lat, lng, zoom) {
+      map.flyTo([lat, lng], zoom, { duration: 0.6 });
+    };
+
     window.renderMarkers = function(runnersData, selectedId) {
       Object.keys(markers).forEach(function(id) {
         map.removeLayer(markers[id]);
@@ -162,8 +166,11 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
       }))
     );
 
+    const selected = runners.find((r) => r.id === selectedRunnerId);
+
     const js = `
       window.renderMarkers(${runnersJson}, ${selectedRunnerId ? "'" + selectedRunnerId + "'" : 'null'});
+      ${selected ? `window.flyToRunner(${selected.latitude}, ${selected.longitude}, 17);` : ''}
       true;
     `;
     webViewRef.current.injectJavaScript(js);
