@@ -16,6 +16,7 @@ interface LeafletMapProps {
   selectedRunnerId: string | null;
   onRunnerPress: (id: string) => void;
   onMapPress: () => void;
+  userLocation: { latitude: number; longitude: number } | null;
 }
 
 const MAP_HTML = `
@@ -71,6 +72,14 @@ const MAP_HTML = `
       white-space: nowrap;
       box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
+    .user-location-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #4285f4;
+      border: 3px solid #ffffff;
+      box-shadow: 0 0 0 4px rgba(66, 133, 244, 0.3), 0 2px 6px rgba(0,0,0,0.4);
+    }
   </style>
 </head>
 <body>
@@ -98,6 +107,23 @@ const MAP_HTML = `
 
     window.flyToRunner = function(lat, lng, zoom) {
       map.flyTo([lat, lng], zoom, { duration: 0.6 });
+    };
+
+    var userLocationMarker = null;
+
+    window.setUserLocation = function(lat, lng) {
+      var latlng = [lat, lng];
+      if (userLocationMarker) {
+        userLocationMarker.setLatLng(latlng);
+      } else {
+        var icon = L.divIcon({
+          className: 'user-location-marker',
+          html: '<div class="user-location-dot"></div>',
+          iconSize: [0, 0],
+          iconAnchor: [0, 0]
+        });
+        userLocationMarker = L.marker(latlng, { icon: icon, zIndexOffset: 1000 }).addTo(map);
+      }
     };
 
     window.renderMarkers = function(runnersData, selectedId) {
@@ -136,9 +162,11 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
   selectedRunnerId,
   onRunnerPress,
   onMapPress,
+  userLocation,
 }) => {
   const webViewRef = useRef<WebView>(null);
   const [webviewLoaded, setWebviewLoaded] = useState(false);
+  const hasCenteredOnUserRef = useRef(false);
 
   const onMessage = useCallback(
     (event: any) => {
@@ -175,6 +203,20 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
     `;
     webViewRef.current.injectJavaScript(js);
   }, [webviewLoaded, runners, selectedRunnerId]);
+
+  useEffect(() => {
+    if (!webviewLoaded || !webViewRef.current || !userLocation) return;
+
+    const shouldCenter = !hasCenteredOnUserRef.current;
+    if (shouldCenter) hasCenteredOnUserRef.current = true;
+
+    const js = `
+      window.setUserLocation(${userLocation.latitude}, ${userLocation.longitude});
+      ${shouldCenter ? `window.flyToRunner(${userLocation.latitude}, ${userLocation.longitude}, 16);` : ''}
+      true;
+    `;
+    webViewRef.current.injectJavaScript(js);
+  }, [webviewLoaded, userLocation]);
 
   return (
     <View style={styles.container}>

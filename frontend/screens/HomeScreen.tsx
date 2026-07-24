@@ -11,6 +11,7 @@ import TopBar from '../components/TopBar';
 import GlassCard from '../components/GlassCard';
 import OnlineToggleButton from '../components/OnlineToggleButton';
 import LeafletMap from '../components/LeafletMap';
+import { useLocation } from '../hooks/useLocation';
 
 const DEMO_RUNNERS = [
   { id: '1', username: 'SARAH', latitude: 1.3021, longitude: 103.8198, pace: "8'10\"", distance: '0.5 mi' },
@@ -22,6 +23,7 @@ const HomeScreen: React.FC = () => {
   const [isOnline, setIsOnline] = useState(false);
   const [selectedRunner, setSelectedRunner] = useState<typeof DEMO_RUNNERS[number] | null>(null);
   const [runnerCount] = useState(5);
+  const { location: userLocation } = useLocation();
 
   const handleRunnerPress = (id: string) => {
     const runner = DEMO_RUNNERS.find((r) => r.id === id);
@@ -41,6 +43,7 @@ const HomeScreen: React.FC = () => {
         selectedRunnerId={selectedRunner?.id ?? null}
         onRunnerPress={handleRunnerPress}
         onMapPress={handleMapPress}
+        userLocation={userLocation}
       />
 
       <OnlineToggleButton
