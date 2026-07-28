@@ -54,9 +54,9 @@ This creates the `users` and `runners` tables with Row Level Security policies.
 
 ### 5. Enable Realtime (for live runner updates)
 
-1. In the Supabase dashboard, go to **Database** → **Replication**
-2. Toggle ON replication for the `runners` table
-3. This allows the app to receive live updates when runners go online/offline
+1. Run `007_enable_realtime_runners.sql` in the SQL Editor. This both adds `runners` to the `supabase_realtime` publication and sets `REPLICA IDENTITY FULL`, which is required so `UPDATE`/`DELETE` change payloads include `user_id` (not just the internal PK) — the app needs this to know which runner went offline.
+2. In the Supabase dashboard, confirm under **Database** → **Replication** that `runners` now shows as replicated (toggling it there alone only handles the publication, not the replica identity).
+3. This allows the app to receive live updates when runners go online/offline, join, or move.
 
 ## Database Schema
 

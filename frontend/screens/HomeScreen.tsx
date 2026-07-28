@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 
-import { Colors, Spacing, BorderRadius } from '../theme';
+import { Colors, Spacing, BorderRadius, FontSize } from '../theme';
 import TopBar from '../components/TopBar';
 import GlassCard from '../components/GlassCard';
 import OnlineToggleButton from '../components/OnlineToggleButton';
@@ -32,28 +32,118 @@ interface RunnerRow {
   user: { username: string } | null;
 }
 
+const MIN_SYNC_MOVE_METERS = 15;
+const MIN_SYNC_INTERVAL_MS = 10_000;
+const METERS_PER_MILE = 1609.344;
+
 const HomeScreen: React.FC = () => {
   const { session } = useAuth();
-  const { location: userLocation } = useLocation();
+  const { location: userLocation, errorMsg: locationErrorMsg } = useLocation();
   const [isOnline, setIsOnline] = useState(false);
   const [selectedRunnerId, setSelectedRunnerId] = useState<string | null>(null);
   const [remoteRunners, setRemoteRunners] = useState<RemoteRunner[]>([]);
-  const hasSyncedLocationRef = useRef(false);
+  const isOnlineRef = useRef(isOnline);
+  const lastSyncedRef = useRef<{ latitude: number; longitude: number; at: number } | null>(null);
+  const upsertInFlightRef = useRef(false);
 
+  useEffect(() => {
+    isOnlineRef.current = isOnline;
+  }, [isOnline]);
+
+  // Seed remoteRunners with an initial fetch, then keep it live via Realtime
+  // so users who come online after this screen mounted still show up
+  // without needing a manual refresh.
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
+    const usernameCache = new Map<string, string>();
+
+    const upsertLocal = (
+      row: { user_id: string; latitude: number; longitude: number; pace: number | null },
+      username: string
+    ) => {
+      setRemoteRunners((prev) => {
+        const next: RemoteRunner = {
+          id: row.user_id,
+          username,
+          latitude: Number(row.latitude),
+          longitude: Number(row.longitude),
+          pace: row.pace != null ? Number(row.pace) : null,
+        };
+        const idx = prev.findIndex((r) => r.id === row.user_id);
+        if (idx === -1) return [...prev, next];
+        const copy = prev.slice();
+        copy[idx] = next;
+        return copy;
+      });
+    };
+
+    const removeLocal = (userId: string) => {
+      setRemoteRunners((prev) => prev.filter((r) => r.id !== userId));
+    };
+
+    const handleChange = async (payload: any) => {
+      if (payload.eventType === 'DELETE') {
+        const oldUserId = payload.old?.user_id;
+        if (oldUserId) removeLocal(oldUserId);
+        return;
+      }
+
+      const row = payload.new as {
+        user_id: string;
+        is_active: boolean;
+        latitude: number;
+        longitude: number;
+        pace: number | null;
+      };
+      if (row.user_id === session.user.id) return;
+      if (!row.is_active) {
+        removeLocal(row.user_id);
+        return;
+      }
+
+      const cached = usernameCache.get(row.user_id);
+      if (cached) {
+        upsertLocal(row, cached);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('users')
+        .select('username')
+        .eq('id', row.user_id)
+        .single();
+
+      if (error || !data) {
+        console.error('Failed to resolve username for runner', row.user_id, error);
+        return;
+      }
+      usernameCache.set(row.user_id, data.username);
+      if (!cancelled) upsertLocal(row, data.username);
+    };
+
+    const channel = supabase
+      .channel('runners-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'runners' }, handleChange)
+      .subscribe();
 
     (async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('runners')
         .select('user_id, latitude, longitude, pace, user:users(username)')
         .eq('is_active', true)
         .neq('user_id', session.user.id);
 
+      if (error) {
+        console.error('Failed to load nearby runners', error);
+        return;
+      }
       if (cancelled || !data) return;
 
       const rows = data as unknown as RunnerRow[];
+      rows.forEach((r) => {
+        if (r.user) usernameCache.set(r.user_id, r.user.username);
+      });
       setRemoteRunners(
         rows
           .filter((r) => r.user)
@@ -69,24 +159,46 @@ const HomeScreen: React.FC = () => {
 
     return () => {
       cancelled = true;
+      supabase.removeChannel(channel);
     };
   }, [session]);
 
-  useEffect(() => {
-    if (!session || !userLocation || hasSyncedLocationRef.current) return;
-    hasSyncedLocationRef.current = true;
+  const syncRunnerLocation = useCallback(
+    async (loc: { latitude: number; longitude: number }, force = false) => {
+      if (!session) return;
+      const last = lastSyncedRef.current;
+      const movedMeters = last ? getDistanceMiles(last, loc) * METERS_PER_MILE : Infinity;
+      const elapsedMs = last ? Date.now() - last.at : Infinity;
+      if (!force && last && movedMeters < MIN_SYNC_MOVE_METERS && elapsedMs < MIN_SYNC_INTERVAL_MS) {
+        return;
+      }
+      if (upsertInFlightRef.current) return;
 
-    supabase.from('runners').upsert(
-      {
-        user_id: session.user.id,
-        latitude: userLocation.latitude,
-        longitude: userLocation.longitude,
-        is_active: isOnline,
-        last_update: new Date().toISOString(),
-      },
-      { onConflict: 'user_id' }
-    );
-  }, [session, userLocation]);
+      upsertInFlightRef.current = true;
+      const { error } = await supabase.from('runners').upsert(
+        {
+          user_id: session.user.id,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          is_active: isOnlineRef.current,
+          last_update: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+      upsertInFlightRef.current = false;
+
+      if (error) {
+        console.error('Failed to sync runner location', error);
+        return;
+      }
+      lastSyncedRef.current = { latitude: loc.latitude, longitude: loc.longitude, at: Date.now() };
+    },
+    [session]
+  );
+
+  useEffect(() => {
+    if (userLocation) syncRunnerLocation(userLocation);
+  }, [userLocation, syncRunnerLocation]);
 
   const runners = useMemo(
     () =>
@@ -116,13 +228,31 @@ const HomeScreen: React.FC = () => {
   const handleToggleOnline = async () => {
     const next = !isOnline;
     setIsOnline(next);
+    isOnlineRef.current = next;
     if (!session) return;
-    await supabase.from('runners').update({ is_active: next }).eq('user_id', session.user.id);
+
+    if (userLocation) {
+      await syncRunnerLocation(userLocation, true);
+    } else {
+      const { error } = await supabase
+        .from('runners')
+        .update({ is_active: next })
+        .eq('user_id', session.user.id);
+      if (error) console.error('Failed to update online status', error);
+    }
   };
 
   return (
     <View style={styles.container}>
       <TopBar />
+
+      {locationErrorMsg && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>
+            {locationErrorMsg} — you won't appear to other runners until location is enabled.
+          </Text>
+        </View>
+      )}
 
       <LeafletMap
         runners={runners}
@@ -187,6 +317,22 @@ const styles = StyleSheet.create({
     top: 100,
     alignSelf: 'center',
     zIndex: 30,
+  },
+  errorBanner: {
+    position: 'absolute',
+    top: Spacing.xl,
+    left: Spacing.containerMargin,
+    right: Spacing.containerMargin,
+    zIndex: 40,
+    backgroundColor: Colors.errorContainer,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  errorBannerText: {
+    fontSize: FontSize.bodyMd,
+    color: Colors.onErrorContainer,
+    fontWeight: '600',
   },
   chipContainer: {
     position: 'absolute',
