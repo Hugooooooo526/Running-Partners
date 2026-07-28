@@ -12,6 +12,7 @@ import TopBar from '../components/TopBar';
 import GlassCard from '../components/GlassCard';
 import OnlineToggleButton from '../components/OnlineToggleButton';
 import LeafletMap from '../components/LeafletMap';
+import LocationSearchInput from '../components/LocationSearchInput';
 import { useLocation } from '../hooks/useLocation';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../services/supabaseClient';
@@ -37,6 +38,29 @@ interface IncomingInvite {
   id: string;
   senderId: string;
   senderUsername: string;
+}
+
+interface RoutePoint {
+  latitude: number;
+  longitude: number;
+}
+
+interface RouteDraft {
+  targetId: string;
+  targetUsername: string;
+  start: RoutePoint | null;
+  end: RoutePoint | null;
+  startLabel: string | null;
+  endLabel: string | null;
+  activeField: 'start' | 'end';
+}
+
+interface ActiveSession {
+  inviteId: string;
+  partnerId: string;
+  partnerUsername: string;
+  start: RoutePoint;
+  end: RoutePoint;
 }
 
 const MIN_SYNC_MOVE_METERS = 15;
@@ -86,6 +110,8 @@ const HomeScreen: React.FC = () => {
   const [selectedRunnerId, setSelectedRunnerId] = useState<string | null>(null);
   const [remoteRunners, setRemoteRunners] = useState<RemoteRunner[]>([]);
   const [incomingInvite, setIncomingInvite] = useState<IncomingInvite | null>(null);
+  const [routeDraft, setRouteDraft] = useState<RouteDraft | null>(null);
+  const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
   const isOnlineRef = useRef(isOnline);
   const lastSyncedRef = useRef<{ latitude: number; longitude: number; at: number } | null>(null);
   const upsertInFlightRef = useRef(false);
@@ -228,19 +254,46 @@ const HomeScreen: React.FC = () => {
       setIncomingInvite({ id: row.id, senderId: row.sender_id, senderUsername: data.username });
     };
 
+    const handleEndedElsewhere = (row: { id: string; ended_at: string | null }) => {
+      if (row.ended_at) {
+        setActiveSession((cur) => (cur?.inviteId === row.id ? null : cur));
+        return true;
+      }
+      return false;
+    };
+
     const handleSentInviteUpdate = (payload: any) => {
-      const row = payload.new as { id: string; status: string };
+      const row = payload.new as {
+        id: string;
+        status: string;
+        ended_at: string | null;
+        receiver_id: string;
+        start_latitude: number;
+        start_longitude: number;
+        end_latitude: number;
+        end_longitude: number;
+      };
+      if (handleEndedElsewhere(row)) return;
+
       const username = pendingSentInvitesRef.current.get(row.id);
       if (row.status === 'accepted') {
-        Alert.alert(
-          "You're running partners!",
-          `You and ${username ?? 'your runner'} are now running partners.`
-        );
+        setActiveSession({
+          inviteId: row.id,
+          partnerId: row.receiver_id,
+          partnerUsername: username ?? 'your runner',
+          start: { latitude: Number(row.start_latitude), longitude: Number(row.start_longitude) },
+          end: { latitude: Number(row.end_latitude), longitude: Number(row.end_longitude) },
+        });
         pendingSentInvitesRef.current.delete(row.id);
       } else if (row.status === 'declined') {
         Alert.alert('Invite declined', `${username ?? 'They'} declined your invite.`);
         pendingSentInvitesRef.current.delete(row.id);
       }
+    };
+
+    const handleReceivedInviteUpdate = (payload: any) => {
+      const row = payload.new as { id: string; ended_at: string | null };
+      handleEndedElsewhere(row);
     };
 
     const channel = supabase
@@ -264,6 +317,16 @@ const HomeScreen: React.FC = () => {
           filter: `sender_id=eq.${session.user.id}`,
         },
         handleSentInviteUpdate
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'run_invites',
+          filter: `receiver_id=eq.${session.user.id}`,
+        },
+        handleReceivedInviteUpdate
       )
       .subscribe();
 
@@ -336,22 +399,70 @@ const HomeScreen: React.FC = () => {
     setSelectedRunnerId(id);
   };
 
-  const handleMapPress = () => {
+  const setRouteDraftPoint = (field: 'start' | 'end', point: RoutePoint, label: string) => {
+    setRouteDraft((cur) => {
+      if (!cur) return cur;
+      const other = field === 'start' ? 'end' : 'start';
+      const next: RouteDraft = {
+        ...cur,
+        [field]: point,
+        [field === 'start' ? 'startLabel' : 'endLabel']: label,
+      };
+      next.activeField = cur[other] ? field : other;
+      return next;
+    });
+  };
+
+  const handleMapPress = (lat: number, lng: number) => {
+    if (routeDraft) {
+      setRouteDraftPoint(
+        routeDraft.activeField,
+        { latitude: lat, longitude: lng },
+        `Pinned location (${lat.toFixed(4)}, ${lng.toFixed(4)})`
+      );
+      return;
+    }
     setSelectedRunnerId(null);
   };
 
-  const handleInvite = async () => {
-    if (!session || !selectedRunner) return;
+  const handleInviteToJog = () => {
+    if (!selectedRunner) return;
+    setRouteDraft({
+      targetId: selectedRunner.id,
+      targetUsername: selectedRunner.username,
+      start: null,
+      end: null,
+      startLabel: null,
+      endLabel: null,
+      activeField: 'start',
+    });
+  };
+
+  const handleCancelRouteDraft = () => {
+    setRouteDraft(null);
+  };
+
+  const handleStartJog = async () => {
+    if (!session || !routeDraft || !routeDraft.start || !routeDraft.end) return;
+    const { targetId, targetUsername, start, end } = routeDraft;
 
     const { data, error } = await supabase
       .from('run_invites')
-      .insert({ sender_id: session.user.id, receiver_id: selectedRunner.id, status: 'pending' })
+      .insert({
+        sender_id: session.user.id,
+        receiver_id: targetId,
+        status: 'pending',
+        start_latitude: start.latitude,
+        start_longitude: start.longitude,
+        end_latitude: end.latitude,
+        end_longitude: end.longitude,
+      })
       .select('id')
       .single();
 
     if (error) {
       if (error.code === '23505') {
-        Alert.alert('Invite already sent', `You already have a pending invite with ${selectedRunner.username}.`);
+        Alert.alert('Invite already sent', `You already have a pending invite with ${targetUsername}.`);
       } else {
         console.error('Failed to send invite', error);
         Alert.alert('Something went wrong', 'Could not send the invite. Please try again.');
@@ -359,8 +470,9 @@ const HomeScreen: React.FC = () => {
       return;
     }
 
-    if (data) pendingSentInvitesRef.current.set(data.id, selectedRunner.username);
-    Alert.alert('Invite sent', `Waiting for ${selectedRunner.username} to respond.`);
+    if (data) pendingSentInvitesRef.current.set(data.id, targetUsername);
+    setRouteDraft(null);
+    Alert.alert('Invite sent', `Waiting for ${targetUsername} to respond.`);
   };
 
   const respondToInvite = async (accept: boolean) => {
@@ -368,10 +480,12 @@ const HomeScreen: React.FC = () => {
     const invite = incomingInvite;
     setIncomingInvite(null);
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('run_invites')
       .update({ status: accept ? 'accepted' : 'declined', responded_at: new Date().toISOString() })
-      .eq('id', invite.id);
+      .eq('id', invite.id)
+      .select('start_latitude, start_longitude, end_latitude, end_longitude')
+      .single();
 
     if (error) {
       console.error('Failed to respond to invite', error);
@@ -379,8 +493,31 @@ const HomeScreen: React.FC = () => {
       return;
     }
 
-    if (accept) {
-      Alert.alert("You're running partners!", `You and ${invite.senderUsername} are now running partners.`);
+    if (accept && data) {
+      setActiveSession({
+        inviteId: invite.id,
+        partnerId: invite.senderId,
+        partnerUsername: invite.senderUsername,
+        start: { latitude: Number(data.start_latitude), longitude: Number(data.start_longitude) },
+        end: { latitude: Number(data.end_latitude), longitude: Number(data.end_longitude) },
+      });
+    }
+  };
+
+  const handleEndJog = async () => {
+    if (!activeSession) return;
+    const session_ = activeSession;
+    setActiveSession(null);
+
+    const { error } = await supabase
+      .from('run_invites')
+      .update({ ended_at: new Date().toISOString() })
+      .eq('id', session_.inviteId);
+
+    if (error) {
+      console.error('Failed to end jog', error);
+      setActiveSession(session_);
+      Alert.alert('Something went wrong', 'Could not end the jog. Please try again.');
     }
   };
 
@@ -401,6 +538,16 @@ const HomeScreen: React.FC = () => {
     }
   };
 
+  const mapRunners = activeSession
+    ? runners.filter((r) => r.id === activeSession.partnerId)
+    : runners;
+
+  const mapRoute = activeSession
+    ? { start: activeSession.start, end: activeSession.end }
+    : routeDraft
+    ? { start: routeDraft.start, end: routeDraft.end }
+    : null;
+
   return (
     <View style={styles.container}>
       <TopBar />
@@ -414,11 +561,12 @@ const HomeScreen: React.FC = () => {
       )}
 
       <LeafletMap
-        runners={runners}
+        runners={mapRunners}
         selectedRunnerId={selectedRunnerId}
         onRunnerPress={handleRunnerPress}
         onMapPress={handleMapPress}
         userLocation={userLocation}
+        route={mapRoute}
       />
 
       <OnlineToggleButton
@@ -430,11 +578,89 @@ const HomeScreen: React.FC = () => {
       <View style={styles.chipContainer}>
         <View style={styles.chip}>
           <View style={styles.chipDot} />
-          <Text style={styles.chipText}>{runners.length} RUNNERS NEARBY</Text>
+          <Text style={styles.chipText}>
+            {activeSession
+              ? `RUNNING WITH ${activeSession.partnerUsername.toUpperCase()}`
+              : `${mapRunners.length} RUNNERS NEARBY`}
+          </Text>
         </View>
       </View>
 
-      {selectedRunner && (
+      {activeSession && (
+        <GlassCard style={styles.bottomCard}>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardHeaderLeft}>
+              <View style={styles.cardAvatar}>
+                <Text style={styles.cardAvatarText}>
+                  {activeSession.partnerUsername[0]}
+                </Text>
+              </View>
+              <View>
+                <Text style={styles.cardName}>{activeSession.partnerUsername}</Text>
+                <Text style={styles.cardDistance}>Jog in progress</Text>
+              </View>
+            </View>
+          </View>
+
+          <TouchableOpacity style={styles.endJogButton} activeOpacity={0.8} onPress={handleEndJog}>
+            <Text style={styles.endJogText}>END JOG</Text>
+          </TouchableOpacity>
+        </GlassCard>
+      )}
+
+      {!activeSession && routeDraft && (
+        <GlassCard style={styles.bottomCard}>
+          <Text style={styles.cardName}>{routeDraft.targetUsername}</Text>
+
+          <View style={styles.routeSearchGroup}>
+            <LocationSearchInput
+              label="FROM"
+              placeholder="Search a starting point"
+              active={routeDraft.activeField === 'start'}
+              externalValue={routeDraft.startLabel}
+              onFocus={() => setRouteDraft((cur) => (cur ? { ...cur, activeField: 'start' } : cur))}
+              onPick={(point, label) => setRouteDraftPoint('start', point, label)}
+            />
+            <LocationSearchInput
+              label="TO"
+              placeholder="Search an ending point"
+              active={routeDraft.activeField === 'end'}
+              externalValue={routeDraft.endLabel}
+              onFocus={() => setRouteDraft((cur) => (cur ? { ...cur, activeField: 'end' } : cur))}
+              onPick={(point, label) => setRouteDraftPoint('end', point, label)}
+            />
+          </View>
+
+          <Text style={styles.cardDistance}>
+            {routeDraft.start && routeDraft.end
+              ? 'Route ready — press START to send the invite'
+              : `Tap the map to drop a pin for ${routeDraft.activeField === 'start' ? 'FROM' : 'TO'}, or search above`}
+          </Text>
+
+          <View style={styles.inviteActionsRow}>
+            <TouchableOpacity
+              style={styles.declineButton}
+              activeOpacity={0.8}
+              onPress={handleCancelRouteDraft}
+            >
+              <Text style={styles.declineText}>CANCEL</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.acceptButton,
+                (!routeDraft.start || !routeDraft.end) && styles.acceptButtonDisabled,
+              ]}
+              activeOpacity={0.8}
+              disabled={!routeDraft.start || !routeDraft.end}
+              onPress={handleStartJog}
+            >
+              <Text style={styles.inviteText}>START</Text>
+            </TouchableOpacity>
+          </View>
+        </GlassCard>
+      )}
+
+      {!activeSession && !routeDraft && selectedRunner && (
         <GlassCard style={styles.bottomCard}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLeft}>
@@ -456,14 +682,14 @@ const HomeScreen: React.FC = () => {
             </View>
           </View>
 
-          <TouchableOpacity style={styles.inviteButton} activeOpacity={0.8} onPress={handleInvite}>
+          <TouchableOpacity style={styles.inviteButton} activeOpacity={0.8} onPress={handleInviteToJog}>
             <Text style={styles.inviteIcon}>🏃</Text>
             <Text style={styles.inviteText}>INVITE TO JOG</Text>
           </TouchableOpacity>
         </GlassCard>
       )}
 
-      {incomingInvite && (
+      {incomingInvite && !activeSession && !routeDraft && (
         <GlassCard style={styles.inviteCard}>
           <View style={styles.cardHeaderLeft}>
             <View style={styles.cardAvatar}>
@@ -564,6 +790,9 @@ const styles = StyleSheet.create({
     right: Spacing.containerMargin,
     zIndex: 30,
   },
+  routeSearchGroup: {
+    marginTop: 12,
+  },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -630,6 +859,21 @@ const styles = StyleSheet.create({
   inviteIcon: {
     fontSize: 18,
   },
+  endJogButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.errorContainer,
+    height: Spacing.touchTarget,
+    borderRadius: BorderRadius.full,
+    marginTop: 16,
+  },
+  endJogText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.onErrorContainer,
+    letterSpacing: 0.5,
+  },
   inviteText: {
     fontSize: 12,
     fontWeight: '700',
@@ -670,6 +914,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primaryContainer,
     height: Spacing.touchTarget,
     borderRadius: BorderRadius.full,
+  },
+  acceptButtonDisabled: {
+    opacity: 0.4,
   },
 });
 
