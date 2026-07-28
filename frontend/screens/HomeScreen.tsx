@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
 
 import { Colors, Spacing, BorderRadius, FontSize } from '../theme';
@@ -32,9 +33,51 @@ interface RunnerRow {
   user: { username: string } | null;
 }
 
+interface IncomingInvite {
+  id: string;
+  senderId: string;
+  senderUsername: string;
+}
+
 const MIN_SYNC_MOVE_METERS = 15;
 const MIN_SYNC_INTERVAL_MS = 10_000;
 const METERS_PER_MILE = 1609.344;
+
+const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+
+function base64UrlDecode(input: string): string {
+  const base64 = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  let output = '';
+  let buffer = 0;
+  let bits = 0;
+  for (const char of padded) {
+    if (char === '=') break;
+    const value = BASE64_CHARS.indexOf(char);
+    if (value === -1) continue;
+    buffer = (buffer << 6) | value;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output += String.fromCharCode((buffer >> bits) & 0xff);
+    }
+  }
+  return decodeURIComponent(
+    output
+      .split('')
+      .map((c) => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))
+      .join('')
+  );
+}
+
+function decodeJwtClaims(token: string): any | null {
+  try {
+    const payload = token.split('.')[1];
+    return JSON.parse(base64UrlDecode(payload));
+  } catch (e) {
+    return null;
+  }
+}
 
 const HomeScreen: React.FC = () => {
   const { session } = useAuth();
@@ -42,9 +85,11 @@ const HomeScreen: React.FC = () => {
   const [isOnline, setIsOnline] = useState(false);
   const [selectedRunnerId, setSelectedRunnerId] = useState<string | null>(null);
   const [remoteRunners, setRemoteRunners] = useState<RemoteRunner[]>([]);
+  const [incomingInvite, setIncomingInvite] = useState<IncomingInvite | null>(null);
   const isOnlineRef = useRef(isOnline);
   const lastSyncedRef = useRef<{ latitude: number; longitude: number; at: number } | null>(null);
   const upsertInFlightRef = useRef(false);
+  const pendingSentInvitesRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     isOnlineRef.current = isOnline;
@@ -163,6 +208,71 @@ const HomeScreen: React.FC = () => {
     };
   }, [session]);
 
+  // Live invite handling: show incoming invites as they arrive, and notify
+  // the sender when their invite is accepted/declined.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+
+    const handleIncoming = async (payload: any) => {
+      const row = payload.new as { id: string; sender_id: string; status: string };
+      if (row.status !== 'pending') return;
+
+      const { data, error } = await supabase
+        .from('users')
+        .select('username')
+        .eq('id', row.sender_id)
+        .single();
+
+      if (error || !data || cancelled) return;
+      setIncomingInvite({ id: row.id, senderId: row.sender_id, senderUsername: data.username });
+    };
+
+    const handleSentInviteUpdate = (payload: any) => {
+      const row = payload.new as { id: string; status: string };
+      const username = pendingSentInvitesRef.current.get(row.id);
+      if (row.status === 'accepted') {
+        Alert.alert(
+          "You're running partners!",
+          `You and ${username ?? 'your runner'} are now running partners.`
+        );
+        pendingSentInvitesRef.current.delete(row.id);
+      } else if (row.status === 'declined') {
+        Alert.alert('Invite declined', `${username ?? 'They'} declined your invite.`);
+        pendingSentInvitesRef.current.delete(row.id);
+      }
+    };
+
+    const channel = supabase
+      .channel('run-invites')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'run_invites',
+          filter: `receiver_id=eq.${session.user.id}`,
+        },
+        handleIncoming
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'run_invites',
+          filter: `sender_id=eq.${session.user.id}`,
+        },
+        handleSentInviteUpdate
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [session]);
+
   const syncRunnerLocation = useCallback(
     async (loc: { latitude: number; longitude: number }, force = false) => {
       if (!session) return;
@@ -175,6 +285,11 @@ const HomeScreen: React.FC = () => {
       if (upsertInFlightRef.current) return;
 
       upsertInFlightRef.current = true;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      console.log('[diagnostic] session.user.id =', session.user.id);
+      console.log('[diagnostic] token present =', !!token, 'length =', token?.length);
+      console.log('[diagnostic] token claims =', token ? decodeJwtClaims(token) : null);
       const { error } = await supabase.from('runners').upsert(
         {
           user_id: session.user.id,
@@ -223,6 +338,50 @@ const HomeScreen: React.FC = () => {
 
   const handleMapPress = () => {
     setSelectedRunnerId(null);
+  };
+
+  const handleInvite = async () => {
+    if (!session || !selectedRunner) return;
+
+    const { data, error } = await supabase
+      .from('run_invites')
+      .insert({ sender_id: session.user.id, receiver_id: selectedRunner.id, status: 'pending' })
+      .select('id')
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        Alert.alert('Invite already sent', `You already have a pending invite with ${selectedRunner.username}.`);
+      } else {
+        console.error('Failed to send invite', error);
+        Alert.alert('Something went wrong', 'Could not send the invite. Please try again.');
+      }
+      return;
+    }
+
+    if (data) pendingSentInvitesRef.current.set(data.id, selectedRunner.username);
+    Alert.alert('Invite sent', `Waiting for ${selectedRunner.username} to respond.`);
+  };
+
+  const respondToInvite = async (accept: boolean) => {
+    if (!incomingInvite) return;
+    const invite = incomingInvite;
+    setIncomingInvite(null);
+
+    const { error } = await supabase
+      .from('run_invites')
+      .update({ status: accept ? 'accepted' : 'declined', responded_at: new Date().toISOString() })
+      .eq('id', invite.id);
+
+    if (error) {
+      console.error('Failed to respond to invite', error);
+      Alert.alert('Something went wrong', 'Could not respond to the invite. Please try again.');
+      return;
+    }
+
+    if (accept) {
+      Alert.alert("You're running partners!", `You and ${invite.senderUsername} are now running partners.`);
+    }
   };
 
   const handleToggleOnline = async () => {
@@ -297,10 +456,41 @@ const HomeScreen: React.FC = () => {
             </View>
           </View>
 
-          <TouchableOpacity style={styles.inviteButton} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.inviteButton} activeOpacity={0.8} onPress={handleInvite}>
             <Text style={styles.inviteIcon}>🏃</Text>
             <Text style={styles.inviteText}>INVITE TO JOG</Text>
           </TouchableOpacity>
+        </GlassCard>
+      )}
+
+      {incomingInvite && (
+        <GlassCard style={styles.inviteCard}>
+          <View style={styles.cardHeaderLeft}>
+            <View style={styles.cardAvatar}>
+              <Text style={styles.cardAvatarText}>{incomingInvite.senderUsername[0]}</Text>
+            </View>
+            <View>
+              <Text style={styles.cardName}>{incomingInvite.senderUsername}</Text>
+              <Text style={styles.cardDistance}>wants to run with you</Text>
+            </View>
+          </View>
+
+          <View style={styles.inviteActionsRow}>
+            <TouchableOpacity
+              style={styles.declineButton}
+              activeOpacity={0.8}
+              onPress={() => respondToInvite(false)}
+            >
+              <Text style={styles.declineText}>DECLINE</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.acceptButton}
+              activeOpacity={0.8}
+              onPress={() => respondToInvite(true)}
+            >
+              <Text style={styles.inviteText}>ACCEPT</Text>
+            </TouchableOpacity>
+          </View>
         </GlassCard>
       )}
     </View>
@@ -445,6 +635,41 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.onPrimaryContainer,
     letterSpacing: 0.5,
+  },
+  inviteCard: {
+    position: 'absolute',
+    top: 190,
+    left: Spacing.containerMargin,
+    right: Spacing.containerMargin,
+    zIndex: 40,
+  },
+  inviteActionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  declineButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: Spacing.touchTarget,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.surfaceVariant,
+  },
+  declineText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.onSurfaceVariant,
+    letterSpacing: 0.5,
+  },
+  acceptButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primaryContainer,
+    height: Spacing.touchTarget,
+    borderRadius: BorderRadius.full,
   },
 });
 
