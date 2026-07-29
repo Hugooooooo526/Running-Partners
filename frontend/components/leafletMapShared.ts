@@ -46,7 +46,7 @@ export const MAP_HTML = `
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body, #map { width: 100%; height: 100%; background: #0d0e12; }
+    html, body, #map { width: 100%; height: 100%; background: #f2f2f2; }
     .leaflet-control-zoom { display: none; }
     .leaflet-control-attribution { display: none; }
     .runner-marker {
@@ -124,7 +124,7 @@ ${HOST_BRIDGE_SHIM}
       attributionControl: false
     }).setView([1.2998, 103.8374], 15);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19
     }).addTo(map);
 

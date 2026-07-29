@@ -109,7 +109,7 @@ const styles = StyleSheet.create({
   },
   webview: {
     flex: 1,
-    backgroundColor: '#0d0e12',
+    backgroundColor: '#f2f2f2',
   },
 });
 
