@@ -7,6 +7,7 @@ import { AuthProvider } from './frontend/app/AuthContext';
 import { useAuth } from './frontend/hooks/useAuth';
 import MainNavigator from './frontend/navigation/MainNavigator';
 import AuthScreen from './frontend/screens/AuthScreen';
+import OnboardingScreen from './frontend/screens/OnboardingScreen';
 import { Colors, Spacing, BorderRadius, FontSize } from './frontend/theme';
 
 const RootContent: React.FC = () => {
@@ -27,6 +28,14 @@ const RootContent: React.FC = () => {
         </TouchableOpacity>
       </View>
     );
+  }
+
+  const needsSurvey =
+    !!profile &&
+    (profile.avg_jog_minutes == null || profile.avg_distance_km == null || profile.avg_pace == null);
+
+  if (session && profile && needsSurvey) {
+    return <OnboardingScreen />;
   }
 
   return session ? <MainNavigator /> : <AuthScreen />;

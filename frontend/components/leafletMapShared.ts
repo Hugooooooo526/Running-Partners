@@ -19,6 +19,9 @@ export interface LeafletMapProps {
   onMapPress: (lat: number, lng: number) => void;
   userLocation: { latitude: number; longitude: number } | null;
   route: { start: RoutePoint | null; end: RoutePoint | null } | null;
+  // Recorded GPS breadcrumbs of a past run, drawn as a solid polyline
+  // instead of `route`'s OSRM-fetched suggested path.
+  path?: RoutePoint[];
 }
 
 // Posts to whichever host is listening: react-native-webview's WebView on
@@ -257,6 +260,26 @@ ${HOST_BRIDGE_SHIM}
           drawStraightFallback(startLat, startLng, endLat, endLng);
           map.fitBounds(routeLayer.getBounds(), { padding: [60, 60] });
         });
+    };
+
+    // Draws the actual GPS breadcrumbs recorded during a past run (as
+    // opposed to renderRoute's OSRM-suggested path between two pins).
+    window.renderPath = function(points) {
+      clearRouteLayer();
+      clearPins();
+      if (points.length === 0) return;
+
+      var latlngs = points.map(function(p) { return [p.latitude, p.longitude]; });
+      placePin(points[0].latitude, points[0].longitude, 'start');
+      placePin(points[points.length - 1].latitude, points[points.length - 1].longitude, 'end');
+
+      if (points.length === 1) {
+        map.setView(latlngs[0], 16);
+        return;
+      }
+
+      routeLayer = L.polyline(latlngs, { color: '#c3f400', weight: 5, opacity: 0.9 }).addTo(map);
+      map.fitBounds(routeLayer.getBounds(), { padding: [60, 60] });
     };
   </script>
 </body>

@@ -10,14 +10,6 @@ interface TopBarProps {
 const TopBar: React.FC<TopBarProps> = ({ onMenuPress, onNotificationsPress }) => {
   return (
     <View style={styles.container}>
-      <TouchableOpacity
-        style={styles.iconButton}
-        onPress={onMenuPress}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.icon}>☰</Text>
-      </TouchableOpacity>
-
       <Text style={styles.title}>RUNNING PARTNERS</Text>
 
       <TouchableOpacity

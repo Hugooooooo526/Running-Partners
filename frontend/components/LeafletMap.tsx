@@ -10,6 +10,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
   onMapPress,
   userLocation,
   route,
+  path,
 }) => {
   const webViewRef = useRef<WebView>(null);
   const [webviewLoaded, setWebviewLoaded] = useState(false);
@@ -80,6 +81,11 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
     }
     webViewRef.current.injectJavaScript(js);
   }, [webviewLoaded, route]);
+
+  useEffect(() => {
+    if (!webviewLoaded || !webViewRef.current || !path) return;
+    webViewRef.current.injectJavaScript(`window.renderPath(${JSON.stringify(path)}); true;`);
+  }, [webviewLoaded, path]);
 
   return (
     <View style={styles.container}>

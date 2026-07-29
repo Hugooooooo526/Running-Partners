@@ -73,6 +73,28 @@ export async function signOut() {
   if (error) throw error;
 }
 
+interface SurveyValues {
+  avgJogMinutes: number;
+  avgDistanceKm: number;
+  avgPace: number;
+}
+
+export async function updateSurveyProfile(userId: string, values: SurveyValues): Promise<User> {
+  const { data, error } = await supabase
+    .from('users')
+    .update({
+      avg_jog_minutes: values.avgJogMinutes,
+      avg_distance_km: values.avgDistanceKm,
+      avg_pace: values.avgPace,
+    })
+    .eq('id', userId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as User;
+}
+
 export async function getUserProfile(
   userId: string,
   email: string,

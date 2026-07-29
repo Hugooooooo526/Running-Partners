@@ -4,6 +4,8 @@ export interface User {
   username: string;
   avatar_url?: string;
   avg_pace?: number;
+  avg_jog_minutes?: number;
+  avg_distance_km?: number;
   total_runs: number;
   total_miles: number;
   created_at: string;
@@ -37,12 +39,19 @@ export interface Location {
   timestamp: number;
 }
 
-export interface Run {
+export interface RoutePoint {
+  latitude: number;
+  longitude: number;
+}
+
+export interface RunHistoryEntry {
   id: string;
-  user_id: string;
-  name: string;
-  distance: number;
-  duration: string;
-  pace: string;
-  date: string;
+  partnerId: string;
+  partnerUsername: string;
+  start: RoutePoint;
+  end: RoutePoint;
+  path: RoutePoint[];
+  distanceKm: number | null;
+  durationMinutes: number | null;
+  endedAt: string;
 }

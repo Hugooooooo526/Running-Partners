@@ -17,6 +17,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
   onMapPress,
   userLocation,
   route,
+  path,
 }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
@@ -83,6 +84,12 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
       mapWindow.clearRoute();
     }
   }, [iframeLoaded, route, getMapWindow]);
+
+  useEffect(() => {
+    const mapWindow = getMapWindow();
+    if (!iframeLoaded || !mapWindow || !path) return;
+    mapWindow.renderPath(path);
+  }, [iframeLoaded, path, getMapWindow]);
 
   return (
     <View style={styles.container}>

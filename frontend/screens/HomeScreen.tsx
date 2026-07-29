@@ -16,7 +16,8 @@ import LocationSearchInput from '../components/LocationSearchInput';
 import { useLocation } from '../hooks/useLocation';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../services/supabaseClient';
-import { getDistanceMiles, formatDistanceMiles } from '../utils/distance';
+import { completeRun } from '../services/runService';
+import { getDistanceKm, formatDistanceKm } from '../utils/distance';
 
 interface RemoteRunner {
   id: string;
@@ -61,11 +62,12 @@ interface ActiveSession {
   partnerUsername: string;
   start: RoutePoint;
   end: RoutePoint;
+  startedAt: number;
 }
 
 const MIN_SYNC_MOVE_METERS = 15;
 const MIN_SYNC_INTERVAL_MS = 10_000;
-const METERS_PER_MILE = 1609.344;
+const METERS_PER_KM = 1000;
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
 
@@ -116,6 +118,7 @@ const HomeScreen: React.FC = () => {
   const lastSyncedRef = useRef<{ latitude: number; longitude: number; at: number } | null>(null);
   const upsertInFlightRef = useRef(false);
   const pendingSentInvitesRef = useRef<Map<string, string>>(new Map());
+  const pathRef = useRef<RoutePoint[]>([]);
 
   useEffect(() => {
     isOnlineRef.current = isOnline;
@@ -256,7 +259,11 @@ const HomeScreen: React.FC = () => {
 
     const handleEndedElsewhere = (row: { id: string; ended_at: string | null }) => {
       if (row.ended_at) {
-        setActiveSession((cur) => (cur?.inviteId === row.id ? null : cur));
+        setActiveSession((cur) => {
+          if (cur?.inviteId !== row.id) return cur;
+          pathRef.current = [];
+          return null;
+        });
         return true;
       }
       return false;
@@ -277,12 +284,14 @@ const HomeScreen: React.FC = () => {
 
       const username = pendingSentInvitesRef.current.get(row.id);
       if (row.status === 'accepted') {
+        pathRef.current = [];
         setActiveSession({
           inviteId: row.id,
           partnerId: row.receiver_id,
           partnerUsername: username ?? 'your runner',
           start: { latitude: Number(row.start_latitude), longitude: Number(row.start_longitude) },
           end: { latitude: Number(row.end_latitude), longitude: Number(row.end_longitude) },
+          startedAt: Date.now(),
         });
         pendingSentInvitesRef.current.delete(row.id);
       } else if (row.status === 'declined') {
@@ -340,7 +349,7 @@ const HomeScreen: React.FC = () => {
     async (loc: { latitude: number; longitude: number }, force = false) => {
       if (!session) return;
       const last = lastSyncedRef.current;
-      const movedMeters = last ? getDistanceMiles(last, loc) * METERS_PER_MILE : Infinity;
+      const movedMeters = last ? getDistanceKm(last, loc) * METERS_PER_KM : Infinity;
       const elapsedMs = last ? Date.now() - last.at : Infinity;
       if (!force && last && movedMeters < MIN_SYNC_MOVE_METERS && elapsedMs < MIN_SYNC_INTERVAL_MS) {
         return;
@@ -378,6 +387,17 @@ const HomeScreen: React.FC = () => {
     if (userLocation) syncRunnerLocation(userLocation);
   }, [userLocation, syncRunnerLocation]);
 
+  // Record GPS breadcrumbs for the active jog so the completed route can be
+  // saved to run history once the jog ends.
+  useEffect(() => {
+    if (!activeSession || !userLocation) return;
+    const last = pathRef.current[pathRef.current.length - 1];
+    const movedMeters = last ? getDistanceKm(last, userLocation) * METERS_PER_KM : Infinity;
+    if (movedMeters >= MIN_SYNC_MOVE_METERS) {
+      pathRef.current = [...pathRef.current, { ...userLocation }];
+    }
+  }, [userLocation, activeSession]);
+
   const runners = useMemo(
     () =>
       remoteRunners.map((r) => ({
@@ -385,9 +405,9 @@ const HomeScreen: React.FC = () => {
         username: r.username,
         latitude: r.latitude,
         longitude: r.longitude,
-        pace: r.pace != null ? String(r.pace) : '--',
+        pace: r.pace != null ? `${r.pace.toFixed(1)} km/h` : '--',
         distance: userLocation
-          ? formatDistanceMiles(getDistanceMiles(userLocation, r))
+          ? formatDistanceKm(getDistanceKm(userLocation, r))
           : '--',
       })),
     [remoteRunners, userLocation]
@@ -494,12 +514,14 @@ const HomeScreen: React.FC = () => {
     }
 
     if (accept && data) {
+      pathRef.current = [];
       setActiveSession({
         inviteId: invite.id,
         partnerId: invite.senderId,
         partnerUsername: invite.senderUsername,
         start: { latitude: Number(data.start_latitude), longitude: Number(data.start_longitude) },
         end: { latitude: Number(data.end_latitude), longitude: Number(data.end_longitude) },
+        startedAt: Date.now(),
       });
     }
   };
@@ -507,16 +529,27 @@ const HomeScreen: React.FC = () => {
   const handleEndJog = async () => {
     if (!activeSession) return;
     const session_ = activeSession;
+    const recordedPath = pathRef.current;
     setActiveSession(null);
+    pathRef.current = [];
 
-    const { error } = await supabase
-      .from('run_invites')
-      .update({ ended_at: new Date().toISOString() })
-      .eq('id', session_.inviteId);
+    const path = recordedPath.length > 0 ? recordedPath : [session_.start, session_.end];
+    let distanceKm = 0;
+    for (let i = 1; i < path.length; i++) {
+      distanceKm += getDistanceKm(path[i - 1], path[i]);
+    }
+    const durationMinutes = Math.max(1, Math.round((Date.now() - session_.startedAt) / 60000));
 
-    if (error) {
+    try {
+      await completeRun(session_.inviteId, {
+        path,
+        distanceKm: Number(distanceKm.toFixed(2)),
+        durationMinutes,
+      });
+    } catch (error) {
       console.error('Failed to end jog', error);
       setActiveSession(session_);
+      pathRef.current = recordedPath;
       Alert.alert('Something went wrong', 'Could not end the jog. Please try again.');
     }
   };
