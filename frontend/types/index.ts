@@ -7,7 +7,7 @@ export interface User {
   avg_jog_minutes?: number;
   avg_distance_km?: number;
   total_runs: number;
-  total_miles: number;
+  total_km: number;
   created_at: string;
 }
 

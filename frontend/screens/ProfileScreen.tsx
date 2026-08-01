@@ -67,7 +67,6 @@ function runMetrics(run: RunHistoryEntry): {
 
 interface MetricCardProps {
   label: string;
-  icon: string;
   value: string;
   subtitle?: string;
   series: ChartPoint[];
@@ -76,7 +75,6 @@ interface MetricCardProps {
 
 const MetricCard: React.FC<MetricCardProps> = ({
   label,
-  icon,
   value,
   subtitle,
   series,
@@ -86,7 +84,6 @@ const MetricCard: React.FC<MetricCardProps> = ({
     <View style={styles.metricCard}>
       <View style={styles.metricHeader}>
         <Text style={styles.metricLabel}>{label}</Text>
-        <Text style={styles.metricIcon}>{icon}</Text>
       </View>
       <View style={styles.metricValueRow}>
         <Text style={styles.metricValue}>{value}</Text>
@@ -207,7 +204,6 @@ const ProfileScreen: React.FC = () => {
   const dashboardCards: MetricCardProps[] = [
     {
       label: 'AVG JOG TIME',
-      icon: '⏱️',
       value: dashboard.avgJogMinutes != null ? formatJogTime(Math.round(dashboard.avgJogMinutes)) : '--',
       subtitle: 'PER SESSION',
       series: dashboard.jogTimeSeries,
@@ -215,7 +211,6 @@ const ProfileScreen: React.FC = () => {
     },
     {
       label: 'AVG DISTANCE',
-      icon: '🗺️',
       value: dashboard.avgDistanceKm != null ? `${dashboard.avgDistanceKm.toFixed(1)} km` : '--',
       subtitle: 'PER SESSION',
       series: dashboard.distanceSeries,
@@ -223,7 +218,6 @@ const ProfileScreen: React.FC = () => {
     },
     {
       label: 'AVG PACE',
-      icon: '⚡',
       value: dashboard.avgPace != null ? `${dashboard.avgPace.toFixed(1)} km/h` : '--',
       subtitle: 'PER SESSION',
       series: dashboard.paceSeries,
@@ -231,7 +225,6 @@ const ProfileScreen: React.FC = () => {
     },
     {
       label: 'AVG HEART RATE',
-      icon: '❤️',
       value: dashboard.avgBpm != null ? `${Math.round(dashboard.avgBpm)} bpm` : '--',
       subtitle: 'ESTIMATED',
       series: dashboard.bpmSeries,
@@ -239,7 +232,6 @@ const ProfileScreen: React.FC = () => {
     },
     {
       label: 'AVG CALORIES',
-      icon: '🔥',
       value: dashboard.avgCalories != null ? `${Math.round(dashboard.avgCalories)} kcal` : '--',
       subtitle: 'ESTIMATED',
       series: dashboard.caloriesSeries,
@@ -283,13 +275,11 @@ const ProfileScreen: React.FC = () => {
           <StatCard
             label="TOTAL RUNS"
             value={String(profile.total_runs)}
-            icon="🏃"
             wide
           />
           <StatCard
-            label="TOTAL MILES"
-            value={profile.total_miles.toLocaleString()}
-            icon="🗺️"
+            label="TOTAL KILOMETRES"
+            value={profile.total_km.toLocaleString(undefined, { maximumFractionDigits: 1 })}
             wide
           />
         </View>

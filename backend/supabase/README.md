@@ -68,9 +68,9 @@ This creates the `users` and `runners` tables with Row Level Security policies.
 | email | text | Unique |
 | username | text | Display name |
 | avatar_url | text | Profile photo URL (nullable) |
-| avg_pace | numeric | Average pace in min/mile (nullable) |
+| avg_pace | numeric | Average pace in km/h (nullable) |
 | total_runs | integer | Lifetime run count |
-| total_miles | numeric | Lifetime distance |
+| total_km | numeric | Lifetime distance in kilometres |
 | created_at | timestamptz | Auto-set on signup |
 
 ### `runners` Table

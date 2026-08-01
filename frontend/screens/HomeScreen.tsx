@@ -70,6 +70,13 @@ const MIN_SYNC_MOVE_METERS = 5; // Reduced from 15 to capture more path detail
 const MIN_SYNC_INTERVAL_MS = 5_000; // Reduced from 10s to 5s for better tracking
 const METERS_PER_KM = 1000;
 
+// Breadcrumb recording: push a point when the runner moves this far from the
+// last recorded point, OR when this much time has elapsed since it, so a slow
+// or stopping runner still leaves a continuous trail instead of the recorded
+// path collapsing into a straight start->end line.
+const MIN_TRACK_MOVE_METERS = 5;
+const MAX_TRACK_GAP_MS = 10_000;
+
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
 
 function base64UrlDecode(input: string): string {
@@ -120,10 +127,16 @@ const HomeScreen: React.FC = () => {
   const upsertInFlightRef = useRef(false);
   const pendingSentInvitesRef = useRef<Map<string, string>>(new Map());
   const pathRef = useRef<RoutePoint[]>([]);
+  const lastTrackedAtRef = useRef(0);
+  const userLocationRef = useRef<{ latitude: number; longitude: number } | null>(null);
 
   useEffect(() => {
     isOnlineRef.current = isOnline;
   }, [isOnline]);
+
+  useEffect(() => {
+    userLocationRef.current = userLocation;
+  }, [userLocation]);
 
   // Seed remoteRunners with an initial fetch, then keep it live via Realtime
   // so users who come online after this screen mounted still show up
@@ -263,6 +276,7 @@ const HomeScreen: React.FC = () => {
         setActiveSession((cur) => {
           if (cur?.inviteId !== row.id) return cur;
           pathRef.current = [];
+          lastTrackedAtRef.current = 0;
           return null;
         });
         return true;
@@ -286,7 +300,11 @@ const HomeScreen: React.FC = () => {
       const username = pendingSentInvitesRef.current.get(row.id);
       if (row.status === 'accepted') {
         const startPoint = { latitude: Number(row.start_latitude), longitude: Number(row.start_longitude) };
-        pathRef.current = [startPoint]; // Initialize with start point
+        // Seed the recorded path with where the user actually is, not the
+        // pinned route start — the pinned point can be far from the runner.
+        const currentLoc = userLocationRef.current;
+        pathRef.current = currentLoc ? [{ ...currentLoc }] : [];
+        lastTrackedAtRef.current = Date.now();
         setActiveSession({
           inviteId: row.id,
           partnerId: row.receiver_id,
@@ -390,16 +408,38 @@ const HomeScreen: React.FC = () => {
   }, [userLocation, syncRunnerLocation]);
 
   // Record GPS breadcrumbs for the active jog so the completed route can be
-  // saved to run history once the jog ends.
+  // saved to run history once the jog ends. A point is kept when the runner
+  // moves >= MIN_TRACK_MOVE_METERS from the last one, or when >= MAX_TRACK_GAP_MS
+  // has elapsed, so a slow/stopped runner still leaves a continuous trail.
   useEffect(() => {
+    console.log('[GPS Tracking] Effect triggered', {
+      hasActiveSession: !!activeSession,
+      hasUserLocation: !!userLocation,
+      userLocation,
+      currentPathLength: pathRef.current.length,
+    });
+
     if (!activeSession || !userLocation) return;
+
+    const now = Date.now();
     const last = pathRef.current[pathRef.current.length - 1];
-    const movedMeters = last ? getDistanceKm(last, userLocation) * METERS_PER_KM : Infinity;
-    if (movedMeters >= MIN_SYNC_MOVE_METERS) {
-      pathRef.current = [...pathRef.current, { ...userLocation }];
-      console.log('GPS point recorded:', {
+
+    if (!last) {
+      pathRef.current.push({ ...userLocation });
+      lastTrackedAtRef.current = now;
+      return;
+    }
+
+    const movedMeters = getDistanceKm(last, userLocation) * METERS_PER_KM;
+    const timeSinceLast = now - lastTrackedAtRef.current;
+
+    if (movedMeters >= MIN_TRACK_MOVE_METERS || timeSinceLast >= MAX_TRACK_GAP_MS) {
+      pathRef.current.push({ ...userLocation });
+      lastTrackedAtRef.current = now;
+      console.log('[GPS Tracking] ✅ GPS point recorded:', {
         totalPoints: pathRef.current.length,
         movedMeters: movedMeters.toFixed(1),
+        timeSinceLastMs: timeSinceLast,
         location: userLocation,
       });
     }
@@ -522,7 +562,11 @@ const HomeScreen: React.FC = () => {
 
     if (accept && data) {
       const startPoint = { latitude: Number(data.start_latitude), longitude: Number(data.start_longitude) };
-      pathRef.current = [startPoint]; // Initialize with start point
+      // Seed the recorded path with where the user actually is, not the
+      // pinned route start — the pinned point can be far from the runner.
+      const currentLoc = userLocationRef.current;
+      pathRef.current = currentLoc ? [{ ...currentLoc }] : [];
+      lastTrackedAtRef.current = Date.now();
       setActiveSession({
         inviteId: invite.id,
         partnerId: invite.senderId,
@@ -537,27 +581,47 @@ const HomeScreen: React.FC = () => {
   const handleEndJog = async () => {
     if (!activeSession) return;
     const session_ = activeSession;
-    const recordedPath = pathRef.current;
+    const recordedPath = [...pathRef.current]; // Create a copy
+    
+    console.log('[End Jog] Starting end jog process:', {
+      sessionId: session_.inviteId,
+      recordedPathLength: recordedPath.length,
+      recordedPath: recordedPath,
+    });
     
     // Add the endpoint if it's not already close to the last recorded point
     if (userLocation && recordedPath.length > 0) {
       const lastPoint = recordedPath[recordedPath.length - 1];
       const distToEnd = getDistanceKm(lastPoint, userLocation) * METERS_PER_KM;
+      console.log('[End Jog] Checking if we should add endpoint:', {
+        lastPoint,
+        currentLocation: userLocation,
+        distToEnd: distToEnd.toFixed(1),
+        threshold: MIN_SYNC_MOVE_METERS,
+      });
       if (distToEnd >= MIN_SYNC_MOVE_METERS) {
         recordedPath.push({ ...userLocation });
+        console.log('[End Jog] Added endpoint to path');
       }
     }
     
     setActiveSession(null);
     pathRef.current = [];
+    lastTrackedAtRef.current = 0;
 
-    console.log('Ending jog:', {
+    console.log('[End Jog] Path details:', {
       recordedPathLength: recordedPath.length,
       sessionStart: session_.start,
       sessionEnd: session_.end,
     });
 
     const path = recordedPath.length > 0 ? recordedPath : [session_.start, session_.end];
+    console.log('[End Jog] Final path to save:', {
+      pathLength: path.length,
+      usingRecordedPath: recordedPath.length > 0,
+      path: path,
+    });
+    
     let distanceKm = 0;
     for (let i = 1; i < path.length; i++) {
       distanceKm += getDistanceKm(path[i - 1], path[i]);
@@ -565,7 +629,7 @@ const HomeScreen: React.FC = () => {
     const durationMinutes = Math.max(1, Math.round((Date.now() - session_.startedAt) / 60000));
     const metrics = randomRunMetrics();
 
-    console.log('Run completion data:', {
+    console.log('[End Jog] Computed metrics:', {
       pathLength: path.length,
       distanceKm: distanceKm.toFixed(2),
       durationMinutes,
@@ -573,6 +637,14 @@ const HomeScreen: React.FC = () => {
     });
 
     try {
+      console.log('[End Jog] Calling completeRun with:', {
+        inviteId: session_.inviteId,
+        path,
+        distanceKm: Number(distanceKm.toFixed(2)),
+        durationMinutes,
+        avgPaceKmh: metrics.paceKmh,
+      });
+      
       await completeRun(session_.inviteId, {
         path,
         distanceKm: Number(distanceKm.toFixed(2)),
@@ -581,9 +653,9 @@ const HomeScreen: React.FC = () => {
         avgHeartRateBpm: metrics.avgBpm,
         caloriesKcal: metrics.caloriesKcal,
       });
-      console.log('Run completed successfully');
+      console.log('[End Jog] ✅ Run completed successfully');
     } catch (error) {
-      console.error('Failed to end jog', error);
+      console.error('[End Jog] ❌ Failed to end jog:', error);
       setActiveSession(session_);
       pathRef.current = recordedPath;
       Alert.alert('Something went wrong', 'Could not end the jog. Please try again.');

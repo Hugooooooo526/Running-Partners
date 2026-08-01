@@ -61,7 +61,7 @@ The Home screen displays:
 The Profile page provides:
 
 - Running statistics
-- Total mileage
+- Total kilometres
 - Average pace
 - Activity history
 - User profile

@@ -19,6 +19,8 @@ interface RunInviteRow {
 }
 
 export async function fetchRunHistory(userId: string): Promise<RunHistoryEntry[]> {
+  console.log('[fetchRunHistory] Fetching runs for user:', userId);
+  
   const { data, error } = await supabase
     .from('run_invites')
     .select(
@@ -30,6 +32,18 @@ export async function fetchRunHistory(userId: string): Promise<RunHistoryEntry[]
 
   if (error) throw error;
   const rows = (data ?? []) as RunInviteRow[];
+  
+  console.log('[fetchRunHistory] Raw data from database:', {
+    rowCount: rows.length,
+    rows: rows.map(r => ({
+      id: r.id,
+      pathType: typeof r.path,
+      pathIsArray: Array.isArray(r.path),
+      pathLength: Array.isArray(r.path) ? r.path.length : 'N/A',
+      path: r.path,
+    })),
+  });
+  
   if (rows.length === 0) return [];
 
   const partnerIds = Array.from(
@@ -45,7 +59,7 @@ export async function fetchRunHistory(userId: string): Promise<RunHistoryEntry[]
     (users ?? []).map((u: { id: string; username: string }) => [u.id, u.username])
   );
 
-  return rows.map((r) => {
+  const result = rows.map((r) => {
     const partnerId = r.sender_id === userId ? r.receiver_id : r.sender_id;
     
     // Helper to safely convert to number, returning null for NaN
@@ -55,16 +69,25 @@ export async function fetchRunHistory(userId: string): Promise<RunHistoryEntry[]
       return isNaN(num) ? null : num;
     };
     
+    const pathArray = (r.path ?? []).map((p) => ({
+      latitude: Number(p.latitude),
+      longitude: Number(p.longitude),
+    }));
+    
+    console.log('[fetchRunHistory] Processed run:', {
+      id: r.id,
+      rawPath: r.path,
+      pathArrayLength: pathArray.length,
+      pathArray: pathArray,
+    });
+    
     return {
       id: r.id,
       partnerId,
       partnerUsername: usernameById.get(partnerId) ?? 'Runner',
       start: { latitude: Number(r.start_latitude), longitude: Number(r.start_longitude) },
       end: { latitude: Number(r.end_latitude), longitude: Number(r.end_longitude) },
-      path: (r.path ?? []).map((p) => ({
-        latitude: Number(p.latitude),
-        longitude: Number(p.longitude),
-      })),
+      path: pathArray,
       distanceKm: toNumber(r.distance_km),
       durationMinutes: toNumber(r.duration_minutes),
       avgPaceKmh: toNumber(r.avg_pace_kmh),
@@ -73,6 +96,9 @@ export async function fetchRunHistory(userId: string): Promise<RunHistoryEntry[]
       endedAt: r.ended_at,
     };
   });
+  
+  console.log('[fetchRunHistory] Returning', result.length, 'runs');
+  return result;
 }
 
 interface CompleteRunValues {
@@ -85,6 +111,14 @@ interface CompleteRunValues {
 }
 
 export async function completeRun(inviteId: string, values: CompleteRunValues): Promise<void> {
+  console.log('[completeRun] Updating run_invite:', {
+    inviteId,
+    pathLength: values.path.length,
+    path: values.path,
+    distanceKm: values.distanceKm,
+    durationMinutes: values.durationMinutes,
+  });
+  
   const { error } = await supabase
     .from('run_invites')
     .update({
@@ -98,5 +132,10 @@ export async function completeRun(inviteId: string, values: CompleteRunValues): 
     })
     .eq('id', inviteId);
 
-  if (error) throw error;
+  if (error) {
+    console.error('[completeRun] Database error:', error);
+    throw error;
+  }
+  
+  console.log('[completeRun] ✅ Successfully updated database');
 }
