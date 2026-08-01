@@ -54,7 +54,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
 
     mapWindow.renderMarkers(runnersData, selectedRunnerId);
     const selected = runners.find((r) => r.id === selectedRunnerId);
-    if (selected) mapWindow.flyToRunner(selected.latitude, selected.longitude, 17);
+    if (selected) mapWindow.flyToRunner(selected.latitude, selected.longitude, 16);
   }, [iframeLoaded, runners, selectedRunnerId, getMapWindow]);
 
   useEffect(() => {

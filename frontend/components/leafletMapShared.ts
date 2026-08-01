@@ -121,7 +121,8 @@ export const MAP_HTML = `
 ${HOST_BRIDGE_SHIM}
     var map = L.map('map', {
       zoomControl: false,
-      attributionControl: false
+      attributionControl: false,
+      maxZoom: 16
     }).setView([1.2998, 103.8374], 15);
 
     L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {

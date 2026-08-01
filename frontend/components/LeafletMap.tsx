@@ -46,7 +46,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
 
     const js = `
       window.renderMarkers(${runnersJson}, ${selectedRunnerId ? "'" + selectedRunnerId + "'" : 'null'});
-      ${selected ? `window.flyToRunner(${selected.latitude}, ${selected.longitude}, 17);` : ''}
+      ${selected ? `window.flyToRunner(${selected.latitude}, ${selected.longitude}, 16);` : ''}
       true;
     `;
     webViewRef.current.injectJavaScript(js);

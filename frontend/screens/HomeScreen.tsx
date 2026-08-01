@@ -27,6 +27,16 @@ interface RemoteRunner {
   latitude: number;
   longitude: number;
   pace: number | null;
+  avgJogMinutes: number | null;
+  avgDistanceKm: number | null;
+  avgPace: number | null;
+}
+
+interface RunnerProfile {
+  username: string;
+  avgJogMinutes: number | null;
+  avgDistanceKm: number | null;
+  avgPace: number | null;
 }
 
 interface RunnerRow {
@@ -34,13 +44,24 @@ interface RunnerRow {
   latitude: number;
   longitude: number;
   pace: number | null;
-  user: { username: string } | null;
+  user: {
+    username: string;
+    avg_jog_minutes: number | null;
+    avg_distance_km: number | null;
+    avg_pace: number | null;
+  } | null;
 }
 
 interface IncomingInvite {
   id: string;
   senderId: string;
   senderUsername: string;
+  senderAvatarUrl: string | null;
+  senderPace: number | null;
+  senderTotalRuns: number;
+  senderTotalKm: number;
+  start: RoutePoint | null;
+  end: RoutePoint | null;
 }
 
 interface RoutePoint {
@@ -114,6 +135,13 @@ function decodeJwtClaims(token: string): any | null {
   }
 }
 
+function formatJogTime(totalMinutes?: number): string {
+  if (totalMinutes == null) return '--';
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h}h ${m}m`;
+}
+
 const HomeScreen: React.FC = () => {
   const { session } = useAuth();
   const { location: userLocation, errorMsg: locationErrorMsg } = useLocation();
@@ -146,19 +174,22 @@ const HomeScreen: React.FC = () => {
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    const usernameCache = new Map<string, string>();
+    const usernameCache = new Map<string, RunnerProfile>();
 
     const upsertLocal = (
       row: { user_id: string; latitude: number; longitude: number; pace: number | null },
-      username: string
+      profile: RunnerProfile
     ) => {
       setRemoteRunners((prev) => {
         const next: RemoteRunner = {
           id: row.user_id,
-          username,
+          username: profile.username,
           latitude: Number(row.latitude),
           longitude: Number(row.longitude),
           pace: row.pace != null ? Number(row.pace) : null,
+          avgJogMinutes: profile.avgJogMinutes,
+          avgDistanceKm: profile.avgDistanceKm,
+          avgPace: profile.avgPace,
         };
         const idx = prev.findIndex((r) => r.id === row.user_id);
         if (idx === -1) return [...prev, next];
@@ -200,16 +231,22 @@ const HomeScreen: React.FC = () => {
 
       const { data, error } = await supabase
         .from('users')
-        .select('username')
+        .select('username, avg_jog_minutes, avg_distance_km, avg_pace')
         .eq('id', row.user_id)
         .single();
 
       if (error || !data) {
-        console.error('Failed to resolve username for runner', row.user_id, error);
+        console.error('Failed to resolve profile for runner', row.user_id, error);
         return;
       }
-      usernameCache.set(row.user_id, data.username);
-      if (!cancelled) upsertLocal(row, data.username);
+      const profile: RunnerProfile = {
+        username: data.username,
+        avgJogMinutes: data.avg_jog_minutes != null ? Number(data.avg_jog_minutes) : null,
+        avgDistanceKm: data.avg_distance_km != null ? Number(data.avg_distance_km) : null,
+        avgPace: data.avg_pace != null ? Number(data.avg_pace) : null,
+      };
+      usernameCache.set(row.user_id, profile);
+      if (!cancelled) upsertLocal(row, profile);
     };
 
     const channel = supabase
@@ -220,7 +257,7 @@ const HomeScreen: React.FC = () => {
     (async () => {
       const { data, error } = await supabase
         .from('runners')
-        .select('user_id, latitude, longitude, pace, user:users(username)')
+        .select('user_id, latitude, longitude, pace, user:users(username, avg_jog_minutes, avg_distance_km, avg_pace)')
         .eq('is_active', true)
         .neq('user_id', session.user.id);
 
@@ -232,7 +269,13 @@ const HomeScreen: React.FC = () => {
 
       const rows = data as unknown as RunnerRow[];
       rows.forEach((r) => {
-        if (r.user) usernameCache.set(r.user_id, r.user.username);
+        if (!r.user) return;
+        usernameCache.set(r.user_id, {
+          username: r.user.username,
+          avgJogMinutes: r.user.avg_jog_minutes != null ? Number(r.user.avg_jog_minutes) : null,
+          avgDistanceKm: r.user.avg_distance_km != null ? Number(r.user.avg_distance_km) : null,
+          avgPace: r.user.avg_pace != null ? Number(r.user.avg_pace) : null,
+        });
       });
       setRemoteRunners(
         rows
@@ -243,6 +286,9 @@ const HomeScreen: React.FC = () => {
             latitude: r.latitude,
             longitude: r.longitude,
             pace: r.pace,
+            avgJogMinutes: r.user!.avg_jog_minutes != null ? Number(r.user!.avg_jog_minutes) : null,
+            avgDistanceKm: r.user!.avg_distance_km != null ? Number(r.user!.avg_distance_km) : null,
+            avgPace: r.user!.avg_pace != null ? Number(r.user!.avg_pace) : null,
           }))
       );
     })();
@@ -260,17 +306,43 @@ const HomeScreen: React.FC = () => {
     let cancelled = false;
 
     const handleIncoming = async (payload: any) => {
-      const row = payload.new as { id: string; sender_id: string; status: string };
+      const row = payload.new as {
+        id: string;
+        sender_id: string;
+        status: string;
+        start_latitude: number | null;
+        start_longitude: number | null;
+        end_latitude: number | null;
+        end_longitude: number | null;
+      };
       if (row.status !== 'pending') return;
 
       const { data, error } = await supabase
         .from('users')
-        .select('username')
+        .select('username, avatar_url, avg_pace, total_runs, total_km')
         .eq('id', row.sender_id)
         .single();
 
       if (error || !data || cancelled) return;
-      setIncomingInvite({ id: row.id, senderId: row.sender_id, senderUsername: data.username });
+      const start =
+        row.start_latitude != null && row.start_longitude != null
+          ? { latitude: Number(row.start_latitude), longitude: Number(row.start_longitude) }
+          : null;
+      const end =
+        row.end_latitude != null && row.end_longitude != null
+          ? { latitude: Number(row.end_latitude), longitude: Number(row.end_longitude) }
+          : null;
+      setIncomingInvite({
+        id: row.id,
+        senderId: row.sender_id,
+        senderUsername: data.username,
+        senderAvatarUrl: data.avatar_url,
+        senderPace: data.avg_pace != null ? Number(data.avg_pace) : null,
+        senderTotalRuns: data.total_runs ?? 0,
+        senderTotalKm: data.total_km ?? 0,
+        start,
+        end,
+      });
     };
 
     const handleEndedElsewhere = (row: { id: string; ended_at: string | null }) => {
@@ -458,6 +530,9 @@ const HomeScreen: React.FC = () => {
         distance: userLocation
           ? formatDistanceKm(getDistanceKm(userLocation, r))
           : '--',
+        avgJogMinutes: r.avgJogMinutes,
+        avgDistanceKm: r.avgDistanceKm,
+        avgPace: r.avgPace,
       })),
     [remoteRunners, userLocation]
   );
@@ -825,9 +900,30 @@ const HomeScreen: React.FC = () => {
                 </Text>
               </View>
             </View>
-            <View style={styles.cardPace}>
-              <Text style={styles.paceLabel}>PACE</Text>
-              <Text style={styles.paceValue}>{selectedRunner.pace}</Text>
+          </View>
+
+          <View style={styles.runnerStatsRow}>
+            <View style={styles.runnerStat}>
+              <Text style={styles.runnerStatValue}>
+                {formatJogTime(selectedRunner.avgJogMinutes ?? undefined)}
+              </Text>
+              <Text style={styles.runnerStatLabel}>AVG TIME</Text>
+            </View>
+            <View style={styles.runnerStat}>
+              <Text style={styles.runnerStatValue}>
+                {selectedRunner.avgDistanceKm != null
+                  ? `${selectedRunner.avgDistanceKm.toFixed(1)} km`
+                  : '--'}
+              </Text>
+              <Text style={styles.runnerStatLabel}>AVG DIST</Text>
+            </View>
+            <View style={styles.runnerStat}>
+              <Text style={styles.runnerStatValue}>
+                {selectedRunner.avgPace != null
+                  ? `${selectedRunner.avgPace.toFixed(1)} km/h`
+                  : '--'}
+              </Text>
+              <Text style={styles.runnerStatLabel}>AVG PACE</Text>
             </View>
           </View>
 
@@ -859,6 +955,38 @@ const HomeScreen: React.FC = () => {
                   <Text style={styles.cardDistance}>wants to run with you</Text>
                 </View>
               </View>
+
+              <View style={styles.inviteStatsRow}>
+                <View style={styles.inviteStat}>
+                  <Text style={styles.inviteStatValue}>
+                    {incomingInvite.senderTotalKm.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                  </Text>
+                  <Text style={styles.inviteStatLabel}>TOTAL KM</Text>
+                </View>
+                <View style={styles.inviteStat}>
+                  <Text style={styles.inviteStatValue}>
+                    {incomingInvite.senderPace != null ? incomingInvite.senderPace.toFixed(1) : '--'}
+                  </Text>
+                  <Text style={styles.inviteStatLabel}>AVG KM/H</Text>
+                </View>
+                <View style={styles.inviteStat}>
+                  <Text style={styles.inviteStatValue}>{incomingInvite.senderTotalRuns}</Text>
+                  <Text style={styles.inviteStatLabel}>RUNS</Text>
+                </View>
+              </View>
+
+              {incomingInvite.start && incomingInvite.end && (
+                <View style={styles.inviteMap}>
+                  <LeafletMap
+                    runners={[]}
+                    selectedRunnerId={null}
+                    onRunnerPress={() => {}}
+                    onMapPress={() => {}}
+                    userLocation={null}
+                    route={{ start: incomingInvite.start, end: incomingInvite.end }}
+                  />
+                </View>
+              )}
 
               <View style={styles.inviteActionsRow}>
                 <TouchableOpacity
@@ -1002,6 +1130,31 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.primaryContainer,
   },
+  runnerStatsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.lg,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.surfaceVariant,
+  },
+  runnerStat: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  runnerStatValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  runnerStatLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.onSurfaceVariant,
+    letterSpacing: 0.5,
+    marginTop: 4,
+  },
   inviteButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1068,6 +1221,35 @@ const styles = StyleSheet.create({
     color: Colors.primaryContainer,
     letterSpacing: 1,
     marginBottom: Spacing.md,
+  },
+  inviteStatsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.lg,
+  },
+  inviteStat: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  inviteStatValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  inviteStatLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.onSurfaceVariant,
+    letterSpacing: 0.5,
+    marginTop: 4,
+  },
+  inviteMap: {
+    height: 180,
+    borderRadius: BorderRadius.lg,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.surfaceVariant,
   },
   inviteActionsRow: {
     flexDirection: 'row',
