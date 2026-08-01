@@ -1,10 +1,10 @@
 import React from 'react';
-import { View, StyleSheet, ViewStyle } from 'react-native';
+import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { Colors, BorderRadius } from '../theme';
 
 interface GlassCardProps {
   children: React.ReactNode;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }
 
 const GlassCard: React.FC<GlassCardProps> = ({ children, style }) => {

@@ -19,6 +19,7 @@ interface LocationSearchInputProps {
   active: boolean;
   externalValue: string | null;
   onFocus: () => void;
+  onBlur?: () => void;
   onPick: (point: RoutePoint, label: string) => void;
 }
 
@@ -31,6 +32,7 @@ const LocationSearchInput: React.FC<LocationSearchInputProps> = ({
   active,
   externalValue,
   onFocus,
+  onBlur,
   onPick,
 }) => {
   const [query, setQuery] = useState('');
@@ -86,6 +88,7 @@ const LocationSearchInput: React.FC<LocationSearchInputProps> = ({
         value={query}
         onChangeText={handleChangeText}
         onFocus={onFocus}
+        onBlur={onBlur}
       />
       {loading && (
         <View style={styles.loadingRow}>

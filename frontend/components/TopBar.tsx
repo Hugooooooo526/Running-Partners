@@ -6,12 +6,14 @@ interface TopBarProps {
   onMenuPress?: () => void;
   onNotificationsPress?: () => void;
   hasNotifications?: boolean;
+  notificationCount?: number;
 }
 
 const TopBar: React.FC<TopBarProps> = ({
   onMenuPress,
   onNotificationsPress,
   hasNotifications,
+  notificationCount,
 }) => {
   return (
     <View style={styles.container}>
@@ -25,7 +27,13 @@ const TopBar: React.FC<TopBarProps> = ({
         >
           <Text style={styles.icon}>🔔</Text>
         </TouchableOpacity>
-        {hasNotifications && <View style={styles.badge} />}
+        {(hasNotifications || (notificationCount ?? 0) > 0) && (
+          <View style={styles.badge}>
+            {notificationCount != null && notificationCount > 1 && (
+              <Text style={styles.badgeText}>{notificationCount}</Text>
+            )}
+          </View>
+        )}
       </View>
     </View>
   );
@@ -53,14 +61,22 @@ const styles = StyleSheet.create({
   },
   badge: {
     position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    top: 2,
+    right: 2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
     backgroundColor: '#ff4d4d',
     borderWidth: 1.5,
     borderColor: '#121317',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ffffff',
   },
   iconButton: {
     width: 40,

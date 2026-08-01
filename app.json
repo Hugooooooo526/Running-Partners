@@ -21,6 +21,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#121317"
       },
+      "softwareKeyboardLayoutMode": "resize",
       "package": "com.jcu.smartmatch"
     },
     "web": {

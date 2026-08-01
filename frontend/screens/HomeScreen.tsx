@@ -6,6 +6,10 @@ import {
   TouchableOpacity,
   Alert,
   Modal,
+  KeyboardAvoidingView,
+  Keyboard,
+  Platform,
+  ScrollView,
 } from 'react-native';
 
 import { Colors, Spacing, BorderRadius, FontSize } from '../theme';
@@ -148,8 +152,10 @@ const HomeScreen: React.FC = () => {
   const [isOnline, setIsOnline] = useState(false);
   const [selectedRunnerId, setSelectedRunnerId] = useState<string | null>(null);
   const [remoteRunners, setRemoteRunners] = useState<RemoteRunner[]>([]);
-  const [incomingInvite, setIncomingInvite] = useState<IncomingInvite | null>(null);
+  const [incomingInvites, setIncomingInvites] = useState<IncomingInvite[]>([]);
   const [inviteVisible, setInviteVisible] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [routeDraft, setRouteDraft] = useState<RouteDraft | null>(null);
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
   const isOnlineRef = useRef(isOnline);
@@ -167,6 +173,24 @@ const HomeScreen: React.FC = () => {
   useEffect(() => {
     userLocationRef.current = userLocation;
   }, [userLocation]);
+
+  // Lift the route-search card above the keyboard when it opens. The card is
+  // absolutely positioned over a full-screen WebView map, so KeyboardAvoidingView
+  // (which relies on padding/resize) can't move it — we shift it manually using
+  // the reported keyboard height instead.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (e) =>
+      setKeyboardHeight(e.endCoordinates.height)
+    );
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Seed remoteRunners with an initial fetch, then keep it live via Realtime
   // so users who come online after this screen mounted still show up
@@ -305,18 +329,14 @@ const HomeScreen: React.FC = () => {
     if (!session) return;
     let cancelled = false;
 
-    const handleIncoming = async (payload: any) => {
-      const row = payload.new as {
-        id: string;
-        sender_id: string;
-        status: string;
-        start_latitude: number | null;
-        start_longitude: number | null;
-        end_latitude: number | null;
-        end_longitude: number | null;
-      };
-      if (row.status !== 'pending') return;
-
+    const enqueueInvite = async (row: {
+      id: string;
+      sender_id: string;
+      start_latitude: number | null;
+      start_longitude: number | null;
+      end_latitude: number | null;
+      end_longitude: number | null;
+    }) => {
       const { data, error } = await supabase
         .from('users')
         .select('username, avatar_url, avg_pace, total_runs, total_km')
@@ -332,17 +352,35 @@ const HomeScreen: React.FC = () => {
         row.end_latitude != null && row.end_longitude != null
           ? { latitude: Number(row.end_latitude), longitude: Number(row.end_longitude) }
           : null;
-      setIncomingInvite({
-        id: row.id,
-        senderId: row.sender_id,
-        senderUsername: data.username,
-        senderAvatarUrl: data.avatar_url,
-        senderPace: data.avg_pace != null ? Number(data.avg_pace) : null,
-        senderTotalRuns: data.total_runs ?? 0,
-        senderTotalKm: data.total_km ?? 0,
-        start,
-        end,
+      setIncomingInvites((prev) => {
+        if (prev.some((inv) => inv.id === row.id)) return prev;
+        const invite: IncomingInvite = {
+          id: row.id,
+          senderId: row.sender_id,
+          senderUsername: data.username,
+          senderAvatarUrl: data.avatar_url,
+          senderPace: data.avg_pace != null ? Number(data.avg_pace) : null,
+          senderTotalRuns: data.total_runs ?? 0,
+          senderTotalKm: data.total_km ?? 0,
+          start,
+          end,
+        };
+        return [invite, ...prev];
       });
+    };
+
+    const handleIncoming = (payload: any) => {
+      const row = payload.new as {
+        id: string;
+        sender_id: string;
+        status: string;
+        start_latitude: number | null;
+        start_longitude: number | null;
+        end_latitude: number | null;
+        end_longitude: number | null;
+      };
+      if (row.status !== 'pending') return;
+      enqueueInvite(row);
     };
 
     const handleEndedElsewhere = (row: { id: string; ended_at: string | null }) => {
@@ -395,8 +433,11 @@ const HomeScreen: React.FC = () => {
     };
 
     const handleReceivedInviteUpdate = (payload: any) => {
-      const row = payload.new as { id: string; ended_at: string | null };
+      const row = payload.new as { id: string; ended_at: string | null; status: string };
       handleEndedElsewhere(row);
+      if (row.status !== 'pending') {
+        setIncomingInvites((prev) => prev.filter((inv) => inv.id !== row.id));
+      }
     };
 
     const channel = supabase
@@ -432,6 +473,20 @@ const HomeScreen: React.FC = () => {
         handleReceivedInviteUpdate
       )
       .subscribe();
+
+    // Load any pending invites already waiting for us so the notification
+    // list survives an app restart / re-login.
+    (async () => {
+      const { data, error } = await supabase
+        .from('run_invites')
+        .select('id, sender_id, start_latitude, start_longitude, end_latitude, end_longitude')
+        .eq('receiver_id', session.user.id)
+        .eq('status', 'pending');
+      if (error || !data || cancelled) return;
+      for (const row of data) {
+        await enqueueInvite(row);
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -619,11 +674,9 @@ const HomeScreen: React.FC = () => {
     Alert.alert('Invite sent', `Waiting for ${targetUsername} to respond.`);
   };
 
-  const respondToInvite = async (accept: boolean) => {
-    if (!incomingInvite) return;
-    const invite = incomingInvite;
-    setIncomingInvite(null);
-    setInviteVisible(false);
+  const respondToInvite = async (invite: IncomingInvite, accept: boolean) => {
+    setIncomingInvites((prev) => prev.filter((inv) => inv.id !== invite.id));
+    if (accept) setInviteVisible(false);
 
     const { data, error } = await supabase
       .from('run_invites')
@@ -634,6 +687,9 @@ const HomeScreen: React.FC = () => {
 
     if (error) {
       console.error('Failed to respond to invite', error);
+      setIncomingInvites((prev) =>
+        prev.some((inv) => inv.id === invite.id) ? prev : [invite, ...prev]
+      );
       Alert.alert('Something went wrong', 'Could not respond to the invite. Please try again.');
       return;
     }
@@ -653,6 +709,22 @@ const HomeScreen: React.FC = () => {
         end: { latitude: Number(data.end_latitude), longitude: Number(data.end_longitude) },
         startedAt: Date.now(),
       });
+    }
+  };
+
+  const handleClearAllInvites = async () => {
+    const ids = incomingInvites.map((inv) => inv.id);
+    setIncomingInvites([]);
+    setInviteVisible(false);
+    if (!ids.length) return;
+
+    const { error } = await supabase
+      .from('run_invites')
+      .update({ status: 'declined', responded_at: new Date().toISOString() })
+      .in('id', ids);
+    if (error) {
+      console.error('Failed to clear invites', error);
+      Alert.alert('Something went wrong', 'Could not clear the invitations. Please try again.');
     }
   };
 
@@ -768,11 +840,16 @@ const HomeScreen: React.FC = () => {
     : null;
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+    >
       <TopBar
-        hasNotifications={!!incomingInvite && !activeSession && !routeDraft}
+        notificationCount={incomingInvites.length}
+        hasNotifications={incomingInvites.length > 0 && !activeSession && !routeDraft}
         onNotificationsPress={() => {
-          if (incomingInvite && !activeSession && !routeDraft) setInviteVisible(true);
+          if (incomingInvites.length > 0 && !activeSession && !routeDraft) setInviteVisible(true);
         }}
       />
 
@@ -833,7 +910,13 @@ const HomeScreen: React.FC = () => {
       )}
 
       {!activeSession && routeDraft && (
-        <GlassCard style={styles.bottomCard}>
+        <GlassCard
+          style={[
+            styles.bottomCard,
+            keyboardHeight > 0 && { bottom: keyboardHeight + 80 },
+            searchFocused && Platform.OS === 'web' && styles.bottomCardLifted,
+          ]}
+        >
           <Text style={styles.cardName}>{routeDraft.targetUsername}</Text>
 
           <View style={styles.routeSearchGroup}>
@@ -842,7 +925,11 @@ const HomeScreen: React.FC = () => {
               placeholder="Search a starting point"
               active={routeDraft.activeField === 'start'}
               externalValue={routeDraft.startLabel}
-              onFocus={() => setRouteDraft((cur) => (cur ? { ...cur, activeField: 'start' } : cur))}
+              onFocus={() => {
+                setSearchFocused(true);
+                setRouteDraft((cur) => (cur ? { ...cur, activeField: 'start' } : cur));
+              }}
+              onBlur={() => setSearchFocused(false)}
               onPick={(point, label) => setRouteDraftPoint('start', point, label)}
             />
             <LocationSearchInput
@@ -850,7 +937,11 @@ const HomeScreen: React.FC = () => {
               placeholder="Search an ending point"
               active={routeDraft.activeField === 'end'}
               externalValue={routeDraft.endLabel}
-              onFocus={() => setRouteDraft((cur) => (cur ? { ...cur, activeField: 'end' } : cur))}
+              onFocus={() => {
+                setSearchFocused(true);
+                setRouteDraft((cur) => (cur ? { ...cur, activeField: 'end' } : cur));
+              }}
+              onBlur={() => setSearchFocused(false)}
               onPick={(point, label) => setRouteDraftPoint('end', point, label)}
             />
           </View>
@@ -940,75 +1031,82 @@ const HomeScreen: React.FC = () => {
         transparent
         onRequestClose={() => setInviteVisible(false)}
       >
-        {incomingInvite && (
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalSheet}>
-              <View style={styles.modalHandle} />
-              <Text style={styles.modalTitle}>RUN INVITATION</Text>
-
-              <View style={styles.cardHeaderLeft}>
-                <View style={styles.cardAvatar}>
-                  <Text style={styles.cardAvatarText}>{incomingInvite.senderUsername[0]}</Text>
-                </View>
-                <View>
-                  <Text style={styles.cardName}>{incomingInvite.senderUsername}</Text>
-                  <Text style={styles.cardDistance}>wants to run with you</Text>
-                </View>
-              </View>
-
-              <View style={styles.inviteStatsRow}>
-                <View style={styles.inviteStat}>
-                  <Text style={styles.inviteStatValue}>
-                    {incomingInvite.senderTotalKm.toLocaleString(undefined, { maximumFractionDigits: 1 })}
-                  </Text>
-                  <Text style={styles.inviteStatLabel}>TOTAL KM</Text>
-                </View>
-                <View style={styles.inviteStat}>
-                  <Text style={styles.inviteStatValue}>
-                    {incomingInvite.senderPace != null ? incomingInvite.senderPace.toFixed(1) : '--'}
-                  </Text>
-                  <Text style={styles.inviteStatLabel}>AVG KM/H</Text>
-                </View>
-                <View style={styles.inviteStat}>
-                  <Text style={styles.inviteStatValue}>{incomingInvite.senderTotalRuns}</Text>
-                  <Text style={styles.inviteStatLabel}>RUNS</Text>
-                </View>
-              </View>
-
-              {incomingInvite.start && incomingInvite.end && (
-                <View style={styles.inviteMap}>
-                  <LeafletMap
-                    runners={[]}
-                    selectedRunnerId={null}
-                    onRunnerPress={() => {}}
-                    onMapPress={() => {}}
-                    userLocation={null}
-                    route={{ start: incomingInvite.start, end: incomingInvite.end }}
-                  />
-                </View>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>INVITATIONS</Text>
+              {incomingInvites.length > 0 && (
+                <TouchableOpacity onPress={handleClearAllInvites} activeOpacity={0.7} hitSlop={8}>
+                  <Text style={styles.clearAllText}>CLEAR ALL</Text>
+                </TouchableOpacity>
               )}
-
-              <View style={styles.inviteActionsRow}>
-                <TouchableOpacity
-                  style={styles.declineButton}
-                  activeOpacity={0.8}
-                  onPress={() => respondToInvite(false)}
-                >
-                  <Text style={styles.declineText}>DECLINE</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.acceptButton}
-                  activeOpacity={0.8}
-                  onPress={() => respondToInvite(true)}
-                >
-                  <Text style={styles.inviteText}>ACCEPT</Text>
-                </TouchableOpacity>
-              </View>
             </View>
+
+            {incomingInvites.length === 0 ? (
+              <Text style={styles.emptyText}>No pending invitations.</Text>
+            ) : (
+              <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+                {incomingInvites.map((invite) => (
+                  <View key={invite.id} style={styles.inviteItem}>
+                    <View style={styles.cardHeaderLeft}>
+                      <View style={styles.cardAvatar}>
+                        <Text style={styles.cardAvatarText}>{invite.senderUsername[0]}</Text>
+                      </View>
+                      <View style={styles.inviteItemInfo}>
+                        <Text style={styles.cardName}>{invite.senderUsername}</Text>
+                        <Text style={styles.cardDistance}>wants to run with you</Text>
+                        {invite.start && invite.end && (
+                          <Text style={styles.inviteRoute}>
+                            Route: {formatDistanceKm(getDistanceKm(invite.start, invite.end))}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+
+                    <View style={styles.inviteStatsRow}>
+                      <View style={styles.inviteStat}>
+                        <Text style={styles.inviteStatValue}>
+                          {invite.senderTotalKm.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                        </Text>
+                        <Text style={styles.inviteStatLabel}>TOTAL KM</Text>
+                      </View>
+                      <View style={styles.inviteStat}>
+                        <Text style={styles.inviteStatValue}>
+                          {invite.senderPace != null ? invite.senderPace.toFixed(1) : '--'}
+                        </Text>
+                        <Text style={styles.inviteStatLabel}>AVG KM/H</Text>
+                      </View>
+                      <View style={styles.inviteStat}>
+                        <Text style={styles.inviteStatValue}>{invite.senderTotalRuns}</Text>
+                        <Text style={styles.inviteStatLabel}>RUNS</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.inviteActionsRow}>
+                      <TouchableOpacity
+                        style={styles.declineButton}
+                        activeOpacity={0.8}
+                        onPress={() => respondToInvite(invite, false)}
+                      >
+                        <Text style={styles.declineText}>DECLINE</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.acceptButton}
+                        activeOpacity={0.8}
+                        onPress={() => respondToInvite(invite, true)}
+                      >
+                        <Text style={styles.inviteText}>ACCEPT</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
           </View>
-        )}
+        </View>
       </Modal>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -1078,6 +1176,9 @@ const styles = StyleSheet.create({
     left: Spacing.containerMargin,
     right: Spacing.containerMargin,
     zIndex: 30,
+  },
+  bottomCardLifted: {
+    bottom: 320,
   },
   routeSearchGroup: {
     marginTop: 12,
@@ -1220,7 +1321,43 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.primaryContainer,
     letterSpacing: 1,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: Spacing.md,
+  },
+  clearAllText: {
+    fontSize: FontSize.labelCaps,
+    fontWeight: '700',
+    color: Colors.primary,
+    letterSpacing: 1,
+  },
+  emptyText: {
+    fontSize: FontSize.bodyMd,
+    color: Colors.onSurfaceVariant,
+    textAlign: 'center',
+    paddingVertical: Spacing.xl,
+  },
+  modalScroll: {
+    maxHeight: 440,
+  },
+  inviteItem: {
+    backgroundColor: Colors.surfaceContainerLow,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: Colors.surfaceVariant,
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
+  },
+  inviteItemInfo: {
+    flex: 1,
+  },
+  inviteRoute: {
+    fontSize: FontSize.bodyMd,
+    color: Colors.onSurfaceVariant,
+    marginTop: 4,
   },
   inviteStatsRow: {
     flexDirection: 'row',
@@ -1243,13 +1380,6 @@ const styles = StyleSheet.create({
     color: Colors.onSurfaceVariant,
     letterSpacing: 0.5,
     marginTop: 4,
-  },
-  inviteMap: {
-    height: 180,
-    borderRadius: BorderRadius.lg,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: Colors.surfaceVariant,
   },
   inviteActionsRow: {
     flexDirection: 'row',
