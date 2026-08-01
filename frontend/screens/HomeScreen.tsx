@@ -18,6 +18,7 @@ import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../services/supabaseClient';
 import { completeRun } from '../services/runService';
 import { getDistanceKm, formatDistanceKm } from '../utils/distance';
+import { randomRunMetrics } from '../utils/runEstimates';
 
 interface RemoteRunner {
   id: string;
@@ -65,8 +66,8 @@ interface ActiveSession {
   startedAt: number;
 }
 
-const MIN_SYNC_MOVE_METERS = 15;
-const MIN_SYNC_INTERVAL_MS = 10_000;
+const MIN_SYNC_MOVE_METERS = 5; // Reduced from 15 to capture more path detail
+const MIN_SYNC_INTERVAL_MS = 5_000; // Reduced from 10s to 5s for better tracking
 const METERS_PER_KM = 1000;
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
@@ -284,12 +285,13 @@ const HomeScreen: React.FC = () => {
 
       const username = pendingSentInvitesRef.current.get(row.id);
       if (row.status === 'accepted') {
-        pathRef.current = [];
+        const startPoint = { latitude: Number(row.start_latitude), longitude: Number(row.start_longitude) };
+        pathRef.current = [startPoint]; // Initialize with start point
         setActiveSession({
           inviteId: row.id,
           partnerId: row.receiver_id,
           partnerUsername: username ?? 'your runner',
-          start: { latitude: Number(row.start_latitude), longitude: Number(row.start_longitude) },
+          start: startPoint,
           end: { latitude: Number(row.end_latitude), longitude: Number(row.end_longitude) },
           startedAt: Date.now(),
         });
@@ -395,6 +397,11 @@ const HomeScreen: React.FC = () => {
     const movedMeters = last ? getDistanceKm(last, userLocation) * METERS_PER_KM : Infinity;
     if (movedMeters >= MIN_SYNC_MOVE_METERS) {
       pathRef.current = [...pathRef.current, { ...userLocation }];
+      console.log('GPS point recorded:', {
+        totalPoints: pathRef.current.length,
+        movedMeters: movedMeters.toFixed(1),
+        location: userLocation,
+      });
     }
   }, [userLocation, activeSession]);
 
@@ -514,12 +521,13 @@ const HomeScreen: React.FC = () => {
     }
 
     if (accept && data) {
-      pathRef.current = [];
+      const startPoint = { latitude: Number(data.start_latitude), longitude: Number(data.start_longitude) };
+      pathRef.current = [startPoint]; // Initialize with start point
       setActiveSession({
         inviteId: invite.id,
         partnerId: invite.senderId,
         partnerUsername: invite.senderUsername,
-        start: { latitude: Number(data.start_latitude), longitude: Number(data.start_longitude) },
+        start: startPoint,
         end: { latitude: Number(data.end_latitude), longitude: Number(data.end_longitude) },
         startedAt: Date.now(),
       });
@@ -530,8 +538,24 @@ const HomeScreen: React.FC = () => {
     if (!activeSession) return;
     const session_ = activeSession;
     const recordedPath = pathRef.current;
+    
+    // Add the endpoint if it's not already close to the last recorded point
+    if (userLocation && recordedPath.length > 0) {
+      const lastPoint = recordedPath[recordedPath.length - 1];
+      const distToEnd = getDistanceKm(lastPoint, userLocation) * METERS_PER_KM;
+      if (distToEnd >= MIN_SYNC_MOVE_METERS) {
+        recordedPath.push({ ...userLocation });
+      }
+    }
+    
     setActiveSession(null);
     pathRef.current = [];
+
+    console.log('Ending jog:', {
+      recordedPathLength: recordedPath.length,
+      sessionStart: session_.start,
+      sessionEnd: session_.end,
+    });
 
     const path = recordedPath.length > 0 ? recordedPath : [session_.start, session_.end];
     let distanceKm = 0;
@@ -539,13 +563,25 @@ const HomeScreen: React.FC = () => {
       distanceKm += getDistanceKm(path[i - 1], path[i]);
     }
     const durationMinutes = Math.max(1, Math.round((Date.now() - session_.startedAt) / 60000));
+    const metrics = randomRunMetrics();
+
+    console.log('Run completion data:', {
+      pathLength: path.length,
+      distanceKm: distanceKm.toFixed(2),
+      durationMinutes,
+      metrics,
+    });
 
     try {
       await completeRun(session_.inviteId, {
         path,
         distanceKm: Number(distanceKm.toFixed(2)),
         durationMinutes,
+        avgPaceKmh: metrics.paceKmh,
+        avgHeartRateBpm: metrics.avgBpm,
+        caloriesKcal: metrics.caloriesKcal,
       });
+      console.log('Run completed successfully');
     } catch (error) {
       console.error('Failed to end jog', error);
       setActiveSession(session_);

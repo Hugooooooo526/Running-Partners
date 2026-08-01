@@ -108,7 +108,7 @@ const iframeStyle: React.CSSProperties = {
   width: '100%',
   height: '100%',
   border: 'none',
-  backgroundColor: '#f2f2f2',
+  backgroundColor: '#1a1a1a',
 };
 
 const styles = StyleSheet.create({

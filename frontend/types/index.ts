@@ -53,5 +53,8 @@ export interface RunHistoryEntry {
   path: RoutePoint[];
   distanceKm: number | null;
   durationMinutes: number | null;
+  avgPaceKmh: number | null;
+  avgHeartRateBpm: number | null;
+  caloriesKcal: number | null;
   endedAt: string;
 }

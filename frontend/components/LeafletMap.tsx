@@ -83,8 +83,17 @@ const LeafletMap: React.FC<LeafletMapProps> = ({
   }, [webviewLoaded, route]);
 
   useEffect(() => {
-    if (!webviewLoaded || !webViewRef.current || !path) return;
-    webViewRef.current.injectJavaScript(`window.renderPath(${JSON.stringify(path)}); true;`);
+    if (!webviewLoaded || !webViewRef.current) return;
+    if (!path || path.length === 0) {
+      console.log('LeafletMap: No path to render');
+      return;
+    }
+    console.log('LeafletMap: Rendering path with', path.length, 'points:', path);
+    webViewRef.current.injectJavaScript(`
+      console.log('WebView: renderPath called with', ${JSON.stringify(path)}.length, 'points');
+      window.renderPath(${JSON.stringify(path)}); 
+      true;
+    `);
   }, [webviewLoaded, path]);
 
   return (
@@ -109,7 +118,7 @@ const styles = StyleSheet.create({
   },
   webview: {
     flex: 1,
-    backgroundColor: '#f2f2f2',
+    backgroundColor: '#1a1a1a',
   },
 });
 

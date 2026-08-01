@@ -46,7 +46,7 @@ export const MAP_HTML = `
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body, #map { width: 100%; height: 100%; background: #f2f2f2; }
+    html, body, #map { width: 100%; height: 100%; background: #1a1a1a; }
     .leaflet-control-zoom { display: none; }
     .leaflet-control-attribution { display: none; }
     .runner-marker {
@@ -124,8 +124,11 @@ ${HOST_BRIDGE_SHIM}
       attributionControl: false
     }).setView([1.2998, 103.8374], 15);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19
+    L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 16
+    }).addTo(map);
+    L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 16
     }).addTo(map);
 
     map.on('click', function(e) {

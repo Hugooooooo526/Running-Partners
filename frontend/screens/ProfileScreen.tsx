@@ -1,23 +1,22 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
   StyleSheet,
-  ActivityIndicator,
   Modal,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Spacing, BorderRadius } from '../theme';
 import TopBar from '../components/TopBar';
 import StatCard from '../components/StatCard';
-import SurveyNumberInput from '../components/SurveyNumberInput';
 import LeafletMap from '../components/LeafletMap';
 import { useAuth } from '../hooks/useAuth';
-import { updateSurveyProfile } from '../services/authService';
 import { fetchRunHistory } from '../services/runService';
 import { RunHistoryEntry } from '../types';
+import LineChart, { ChartPoint } from '../components/LineChart';
+import { estimatePaceKmh, estimateCaloriesKcal, estimateAvgBpm } from '../utils/runEstimates';
 
 function formatJogTime(totalMinutes?: number): string {
   if (totalMinutes == null) return '--';
@@ -26,15 +25,80 @@ function formatJogTime(totalMinutes?: number): string {
   return `${h}h ${m}m`;
 }
 
+// Prefer the metrics logged when the run ended, and fall back to estimates for
+// older runs that predate the logging columns.
+function runMetrics(run: RunHistoryEntry): {
+  paceKmh: number | null;
+  bpm: number | null;
+  kcal: number | null;
+} {
+  const { distanceKm, durationMinutes } = run;
+  
+  // If we have logged metrics, use them regardless of distance/duration validity
+  if (run.avgPaceKmh != null) {
+    const pace = run.avgPaceKmh;
+    console.log('Using logged pace:', pace, typeof pace);
+    return {
+      paceKmh: pace,
+      bpm: run.avgHeartRateBpm ?? estimateAvgBpm(pace),
+      kcal: run.caloriesKcal ?? (
+        distanceKm != null && durationMinutes != null && distanceKm > 0 && durationMinutes > 0
+          ? estimateCaloriesKcal(distanceKm, durationMinutes, pace)
+          : null
+      ),
+    };
+  }
+  
+  // Otherwise, try to estimate from distance and duration
+  if (distanceKm != null && durationMinutes != null && distanceKm > 0 && durationMinutes > 0) {
+    const pace = estimatePaceKmh(distanceKm, durationMinutes);
+    console.log('Estimated pace from distance/duration:', pace, distanceKm, durationMinutes);
+    return {
+      paceKmh: pace,
+      bpm: estimateAvgBpm(pace),
+      kcal: estimateCaloriesKcal(distanceKm, durationMinutes, pace),
+    };
+  }
+  
+  // No valid data available
+  console.log('No valid pace data:', { distanceKm, durationMinutes, avgPaceKmh: run.avgPaceKmh });
+  return { paceKmh: null, bpm: null, kcal: null };
+}
+
+interface MetricCardProps {
+  label: string;
+  icon: string;
+  value: string;
+  subtitle?: string;
+  series: ChartPoint[];
+  formatValue: (value: number) => string;
+}
+
+const MetricCard: React.FC<MetricCardProps> = ({
+  label,
+  icon,
+  value,
+  subtitle,
+  series,
+  formatValue,
+}) => {
+  return (
+    <View style={styles.metricCard}>
+      <View style={styles.metricHeader}>
+        <Text style={styles.metricLabel}>{label}</Text>
+        <Text style={styles.metricIcon}>{icon}</Text>
+      </View>
+      <View style={styles.metricValueRow}>
+        <Text style={styles.metricValue}>{value}</Text>
+        {subtitle && <Text style={styles.metricSubtitle}>{subtitle}</Text>}
+      </View>
+      <LineChart series={series} formatValue={formatValue} />
+    </View>
+  );
+};
+
 const ProfileScreen: React.FC = () => {
-  const { profile, signOut, session, refreshProfile } = useAuth();
-  const [editing, setEditing] = useState(false);
-  const [hours, setHours] = useState('');
-  const [minutes, setMinutes] = useState('');
-  const [distanceKm, setDistanceKm] = useState('');
-  const [paceKmh, setPaceKmh] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const { profile, signOut, session } = useAuth();
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunHistoryEntry | null>(null);
 
@@ -44,7 +108,19 @@ const ProfileScreen: React.FC = () => {
       let cancelled = false;
       fetchRunHistory(session.user.id)
         .then((entries) => {
-          if (!cancelled) setRunHistory(entries);
+          if (!cancelled) {
+            console.log('Run history fetched:', entries.length, 'runs');
+            entries.forEach((run, i) => {
+              console.log(`Run ${i}:`, {
+                distanceKm: run.distanceKm,
+                durationMinutes: run.durationMinutes,
+                avgPaceKmh: run.avgPaceKmh,
+                avgHeartRateBpm: run.avgHeartRateBpm,
+                caloriesKcal: run.caloriesKcal,
+              });
+            });
+            setRunHistory(entries);
+          }
         })
         .catch((e) => console.error('Failed to load run history', e));
       return () => {
@@ -52,6 +128,124 @@ const ProfileScreen: React.FC = () => {
       };
     }, [session])
   );
+
+  const dashboard = useMemo(() => {
+    const chronological = [...runHistory].sort(
+      (a, b) => new Date(a.endedAt).getTime() - new Date(b.endedAt).getTime()
+    );
+    const shortDate = (iso: string) =>
+      new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    const jogTimeSeries: ChartPoint[] = [];
+    const distanceSeries: ChartPoint[] = [];
+    const paceSeries: ChartPoint[] = [];
+    const bpmSeries: ChartPoint[] = [];
+    const caloriesSeries: ChartPoint[] = [];
+
+    let totalDistance = 0;
+    let totalMinutes = 0;
+
+    for (const run of chronological) {
+      const { distanceKm, durationMinutes } = run;
+      const label = shortDate(run.endedAt);
+      const metrics = runMetrics(run);
+
+      if (metrics.paceKmh != null && !isNaN(metrics.paceKmh) && metrics.paceKmh > 0) {
+        paceSeries.push({ label, value: metrics.paceKmh });
+      }
+      if (metrics.bpm != null && !isNaN(metrics.bpm) && metrics.bpm > 0) {
+        bpmSeries.push({ label, value: metrics.bpm });
+      }
+      if (metrics.kcal != null && !isNaN(metrics.kcal) && metrics.kcal > 0) {
+        caloriesSeries.push({ label, value: metrics.kcal });
+      }
+      if (durationMinutes != null && !isNaN(durationMinutes) && durationMinutes > 0) {
+        jogTimeSeries.push({ label, value: durationMinutes });
+      }
+      if (distanceKm != null && !isNaN(distanceKm) && distanceKm > 0) {
+        distanceSeries.push({ label, value: distanceKm });
+      }
+      if (distanceKm != null && !isNaN(distanceKm)) totalDistance += distanceKm;
+      if (durationMinutes != null && !isNaN(durationMinutes)) totalMinutes += durationMinutes;
+    }
+
+    const mean = (values: number[]) =>
+      values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+
+    const result = {
+      jogTimeSeries,
+      distanceSeries,
+      paceSeries,
+      bpmSeries,
+      caloriesSeries,
+      avgJogMinutes: mean(jogTimeSeries.map((p) => p.value)),
+      avgDistanceKm: mean(distanceSeries.map((p) => p.value)),
+      avgPace: mean(paceSeries.map((p) => p.value)),
+      avgBpm: mean(bpmSeries.map((p) => p.value)),
+      avgCalories: mean(caloriesSeries.map((p) => p.value)),
+    };
+
+    console.log('Dashboard metrics:', {
+      jogTimeSeries: jogTimeSeries.length,
+      distanceSeries: distanceSeries.length,
+      paceSeries: paceSeries.length,
+      bpmSeries: bpmSeries.length,
+      caloriesSeries: caloriesSeries.length,
+      avgPace: result.avgPace,
+      avgBpm: result.avgBpm,
+      avgCalories: result.avgCalories,
+    });
+
+    return result;
+  }, [runHistory]);
+
+  const selectedRunMetrics = useMemo(
+    () => (selectedRun ? runMetrics(selectedRun) : null),
+    [selectedRun]
+  );
+
+  const dashboardCards: MetricCardProps[] = [
+    {
+      label: 'AVG JOG TIME',
+      icon: '⏱️',
+      value: dashboard.avgJogMinutes != null ? formatJogTime(Math.round(dashboard.avgJogMinutes)) : '--',
+      subtitle: 'PER SESSION',
+      series: dashboard.jogTimeSeries,
+      formatValue: (v) => formatJogTime(Math.round(v)),
+    },
+    {
+      label: 'AVG DISTANCE',
+      icon: '🗺️',
+      value: dashboard.avgDistanceKm != null ? `${dashboard.avgDistanceKm.toFixed(1)} km` : '--',
+      subtitle: 'PER SESSION',
+      series: dashboard.distanceSeries,
+      formatValue: (v) => `${v.toFixed(1)} km`,
+    },
+    {
+      label: 'AVG PACE',
+      icon: '⚡',
+      value: dashboard.avgPace != null ? `${dashboard.avgPace.toFixed(1)} km/h` : '--',
+      subtitle: 'PER SESSION',
+      series: dashboard.paceSeries,
+      formatValue: (v) => `${v.toFixed(1)} km/h`,
+    },
+    {
+      label: 'AVG HEART RATE',
+      icon: '❤️',
+      value: dashboard.avgBpm != null ? `${Math.round(dashboard.avgBpm)} bpm` : '--',
+      subtitle: 'ESTIMATED',
+      series: dashboard.bpmSeries,
+      formatValue: (v) => `${Math.round(v)} bpm`,
+    },
+    {
+      label: 'AVG CALORIES',
+      icon: '🔥',
+      value: dashboard.avgCalories != null ? `${Math.round(dashboard.avgCalories)} kcal` : '--',
+      subtitle: 'ESTIMATED',
+      series: dashboard.caloriesSeries,
+      formatValue: (v) => `${Math.round(v)} kcal`,
+    },
+  ];
 
   if (!profile) {
     return (
@@ -64,53 +258,6 @@ const ProfileScreen: React.FC = () => {
   const joinDate = new Date(profile.created_at)
     .toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
     .toUpperCase();
-
-  const startEditing = () => {
-    const totalMinutes = profile.avg_jog_minutes ?? 0;
-    setHours(String(Math.floor(totalMinutes / 60)));
-    setMinutes(String(totalMinutes % 60));
-    setDistanceKm(profile.avg_distance_km != null ? String(profile.avg_distance_km) : '');
-    setPaceKmh(profile.avg_pace != null ? String(profile.avg_pace) : '');
-    setError(null);
-    setEditing(true);
-  };
-
-  const handleSave = async () => {
-    setError(null);
-    const h = Number(hours);
-    const m = Number(minutes);
-    const distance = Number(distanceKm);
-    const pace = Number(paceKmh);
-
-    if (hours === '' || minutes === '' || distanceKm === '' || paceKmh === '') {
-      setError('Please fill in all fields');
-      return;
-    }
-    if ([h, m, distance, pace].some((n) => Number.isNaN(n) || n < 0)) {
-      setError('Please enter valid, non-negative numbers');
-      return;
-    }
-    if (m > 59) {
-      setError('Minutes must be between 0 and 59');
-      return;
-    }
-    if (!session) return;
-
-    setSaving(true);
-    try {
-      await updateSurveyProfile(session.user.id, {
-        avgJogMinutes: h * 60 + m,
-        avgDistanceKm: distance,
-        avgPace: pace,
-      });
-      await refreshProfile();
-      setEditing(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <View style={styles.container}>
@@ -148,85 +295,14 @@ const ProfileScreen: React.FC = () => {
         </View>
 
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Running Preferences</Text>
-          {!editing && (
-            <TouchableOpacity onPress={startEditing} activeOpacity={0.7}>
-              <Text style={styles.editLink}>EDIT</Text>
-            </TouchableOpacity>
-          )}
+          <Text style={styles.sectionTitle}>Your Dashboard</Text>
         </View>
 
-        {editing ? (
-          <View style={styles.surveyForm}>
-            <View style={styles.row}>
-              <View style={styles.rowItem}>
-                <SurveyNumberInput label="HOURS" value={hours} onChangeText={setHours} unit="h" />
-              </View>
-              <View style={styles.rowItem}>
-                <SurveyNumberInput label="MINUTES" value={minutes} onChangeText={setMinutes} unit="min" />
-              </View>
-            </View>
-            <SurveyNumberInput
-              label="AVERAGE DISTANCE"
-              value={distanceKm}
-              onChangeText={setDistanceKm}
-              unit="km"
-            />
-            <SurveyNumberInput label="AVERAGE PACE" value={paceKmh} onChangeText={setPaceKmh} unit="km/h" />
-
-            {error && <Text style={styles.error}>{error}</Text>}
-
-            <View style={styles.editActionsRow}>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                activeOpacity={0.8}
-                onPress={() => setEditing(false)}
-                disabled={saving}
-              >
-                <Text style={styles.cancelButtonText}>CANCEL</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.saveButton, saving && styles.submitButtonDisabled]}
-                activeOpacity={0.8}
-                onPress={handleSave}
-                disabled={saving}
-              >
-                {saving ? (
-                  <ActivityIndicator color={Colors.onPrimaryContainer} />
-                ) : (
-                  <Text style={styles.saveButtonText}>SAVE</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.statsGrid}>
-            <StatCard
-              label="AVG JOG TIME"
-              value={formatJogTime(profile.avg_jog_minutes)}
-              subtitle="PER SESSION"
-              icon="⏱️"
-              wide
-            />
-            <StatCard
-              label="AVG DISTANCE"
-              value={profile.avg_distance_km != null ? `${profile.avg_distance_km} km` : '--'}
-              subtitle="PER SESSION"
-              icon="🗺️"
-              wide
-            />
-            <View style={styles.paceCardWide}>
-              <View style={styles.paceHeader}>
-                <Text style={styles.paceLabel}>AVERAGE PACE</Text>
-                <Text style={styles.paceIcon}>⚡</Text>
-              </View>
-              <View style={styles.paceValueRow}>
-                <Text style={styles.paceValue}>{profile.avg_pace != null ? profile.avg_pace : '--'}</Text>
-                {profile.avg_pace != null && <Text style={styles.paceUnit}>km/h</Text>}
-              </View>
-            </View>
-          </View>
-        )}
+        <View style={styles.dashboardList}>
+          {dashboardCards.map((card) => (
+            <MetricCard key={card.label} {...card} />
+          ))}
+        </View>
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>History</Text>
@@ -245,7 +321,16 @@ const ProfileScreen: React.FC = () => {
                 key={run.id}
                 style={styles.historyCard}
                 activeOpacity={0.8}
-                onPress={() => setSelectedRun(run)}
+                onPress={() => {
+                  console.log('Selected run:', {
+                    id: run.id,
+                    pathLength: run.path.length,
+                    path: run.path,
+                    start: run.start,
+                    end: run.end,
+                  });
+                  setSelectedRun(run);
+                }}
               >
                 <View style={styles.historyCardLeft}>
                   <View style={styles.historyAvatar}>
@@ -285,7 +370,16 @@ const ProfileScreen: React.FC = () => {
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
               <TouchableOpacity
-                onPress={() => setSelectedRun(null)}
+                onPress={() => {
+                  console.log('Closing modal for run:', {
+                    id: selectedRun.id,
+                    pathLength: selectedRun.path.length,
+                    path: selectedRun.path,
+                    start: selectedRun.start,
+                    end: selectedRun.end,
+                  });
+                  setSelectedRun(null);
+                }}
                 activeOpacity={0.7}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
               >
@@ -319,6 +413,37 @@ const ProfileScreen: React.FC = () => {
                   {selectedRun.durationMinutes != null ? formatJogTime(selectedRun.durationMinutes) : '--'}
                 </Text>
                 <Text style={styles.modalStatLabel}>TIME</Text>
+              </View>
+              <View style={styles.modalStat}>
+                <Text style={styles.modalStatValue}>
+                  {selectedRunMetrics?.paceKmh != null
+                    ? `${selectedRunMetrics.paceKmh.toFixed(1)}`
+                    : '--'}
+                </Text>
+                <Text style={styles.modalStatLabel}>KM/H</Text>
+              </View>
+            </View>
+
+            {selectedRun.path.length === 0 && (
+              <View style={styles.pathWarning}>
+                <Text style={styles.pathWarningText}>
+                  ⚠️ No GPS path recorded — showing straight line from start to end
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.modalStatsSecondary}>
+              <View style={styles.modalStat}>
+                <Text style={styles.modalStatValue}>
+                  {selectedRunMetrics?.bpm != null ? `${Math.round(selectedRunMetrics.bpm)}` : '--'}
+                </Text>
+                <Text style={styles.modalStatLabel}>AVG BPM</Text>
+              </View>
+              <View style={styles.modalStat}>
+                <Text style={styles.modalStatValue}>
+                  {selectedRunMetrics?.kcal != null ? `${Math.round(selectedRunMetrics.kcal)}` : '--'}
+                </Text>
+                <Text style={styles.modalStatLabel}>KCAL</Text>
               </View>
               <View style={styles.modalStat}>
                 <Text style={styles.modalStatValue}>
@@ -399,110 +524,51 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     marginBottom: 32,
   },
-  paceCardWide: {
-    flexBasis: '100%',
+  dashboardList: {
+    gap: 12,
+    marginBottom: 32,
+  },
+  metricCard: {
     backgroundColor: 'rgba(41, 42, 46, 0.5)',
     borderRadius: BorderRadius.lg,
     borderWidth: 1,
     borderColor: 'rgba(68, 73, 51, 0.3)',
     padding: 20,
-    height: 140,
-    justifyContent: 'space-between',
   },
-  paceHeader: {
+  metricHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
-  paceLabel: {
+  metricLabel: {
     fontSize: 10,
     fontWeight: '700',
     color: Colors.primaryContainer,
     letterSpacing: 0.5,
   },
-  paceIcon: {
+  metricIcon: {
     fontSize: 18,
     color: Colors.primaryContainer,
     opacity: 0.4,
   },
-  paceValueRow: {
+  metricValueRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    gap: 4,
+    gap: 8,
+    marginBottom: 12,
   },
-  paceValue: {
-    fontSize: 48,
+  metricValue: {
+    fontSize: 32,
     fontWeight: '800',
     color: Colors.primary,
-    lineHeight: 52,
+    lineHeight: 36,
   },
-  paceUnit: {
-    fontSize: 16,
-    color: Colors.onSurfaceVariant,
-  },
-  editLink: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.primaryContainer,
-    letterSpacing: 0.5,
-  },
-  surveyForm: {
-    backgroundColor: 'rgba(41, 42, 46, 0.5)',
-    borderRadius: BorderRadius.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(68, 73, 51, 0.3)',
-    padding: 20,
-    gap: 16,
-    marginBottom: 32,
-  },
-  row: {
-    flexDirection: 'row',
-    gap: 16,
-  },
-  rowItem: {
-    flex: 1,
-  },
-  error: {
-    color: Colors.error,
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  editActionsRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  cancelButton: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: Spacing.touchTarget,
-    borderRadius: BorderRadius.full,
-    borderWidth: 1,
-    borderColor: Colors.surfaceVariant,
-    backgroundColor: 'rgba(30, 31, 35, 0.8)',
-  },
-  cancelButtonText: {
-    fontSize: 12,
+  metricSubtitle: {
+    fontSize: 10,
     fontWeight: '700',
     color: Colors.onSurfaceVariant,
-    letterSpacing: 0.5,
-  },
-  saveButton: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: Spacing.touchTarget,
-    borderRadius: BorderRadius.full,
-    backgroundColor: Colors.primaryContainer,
-  },
-  saveButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.onPrimaryContainer,
-    letterSpacing: 0.5,
-  },
-  submitButtonDisabled: {
-    opacity: 0.6,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -623,6 +689,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.containerMargin,
     borderTopWidth: 1,
     borderTopColor: Colors.surfaceVariant,
+  },
+  modalStatsSecondary: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.containerMargin,
+  },
+  pathWarning: {
+    marginHorizontal: Spacing.containerMargin,
+    marginBottom: Spacing.md,
+    padding: Spacing.sm,
+    backgroundColor: 'rgba(255, 193, 7, 0.1)',
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 193, 7, 0.3)',
+  },
+  pathWarningText: {
+    fontSize: 11,
+    color: '#FFC107',
+    textAlign: 'center',
+    fontWeight: '600',
   },
   modalStat: {
     alignItems: 'center',
