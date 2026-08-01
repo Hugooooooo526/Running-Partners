@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
+  Modal,
 } from 'react-native';
 
 import { Colors, Spacing, BorderRadius, FontSize } from '../theme';
@@ -120,6 +121,7 @@ const HomeScreen: React.FC = () => {
   const [selectedRunnerId, setSelectedRunnerId] = useState<string | null>(null);
   const [remoteRunners, setRemoteRunners] = useState<RemoteRunner[]>([]);
   const [incomingInvite, setIncomingInvite] = useState<IncomingInvite | null>(null);
+  const [inviteVisible, setInviteVisible] = useState(false);
   const [routeDraft, setRouteDraft] = useState<RouteDraft | null>(null);
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
   const isOnlineRef = useRef(isOnline);
@@ -546,6 +548,7 @@ const HomeScreen: React.FC = () => {
     if (!incomingInvite) return;
     const invite = incomingInvite;
     setIncomingInvite(null);
+    setInviteVisible(false);
 
     const { data, error } = await supabase
       .from('run_invites')
@@ -691,7 +694,12 @@ const HomeScreen: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <TopBar />
+      <TopBar
+        hasNotifications={!!incomingInvite && !activeSession && !routeDraft}
+        onNotificationsPress={() => {
+          if (incomingInvite && !activeSession && !routeDraft) setInviteVisible(true);
+        }}
+      />
 
       {locationErrorMsg && (
         <View style={styles.errorBanner}>
@@ -830,36 +838,48 @@ const HomeScreen: React.FC = () => {
         </GlassCard>
       )}
 
-      {incomingInvite && !activeSession && !routeDraft && (
-        <GlassCard style={styles.inviteCard}>
-          <View style={styles.cardHeaderLeft}>
-            <View style={styles.cardAvatar}>
-              <Text style={styles.cardAvatarText}>{incomingInvite.senderUsername[0]}</Text>
-            </View>
-            <View>
-              <Text style={styles.cardName}>{incomingInvite.senderUsername}</Text>
-              <Text style={styles.cardDistance}>wants to run with you</Text>
-            </View>
-          </View>
+      <Modal
+        visible={inviteVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setInviteVisible(false)}
+      >
+        {incomingInvite && (
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHandle} />
+              <Text style={styles.modalTitle}>RUN INVITATION</Text>
 
-          <View style={styles.inviteActionsRow}>
-            <TouchableOpacity
-              style={styles.declineButton}
-              activeOpacity={0.8}
-              onPress={() => respondToInvite(false)}
-            >
-              <Text style={styles.declineText}>DECLINE</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.acceptButton}
-              activeOpacity={0.8}
-              onPress={() => respondToInvite(true)}
-            >
-              <Text style={styles.inviteText}>ACCEPT</Text>
-            </TouchableOpacity>
+              <View style={styles.cardHeaderLeft}>
+                <View style={styles.cardAvatar}>
+                  <Text style={styles.cardAvatarText}>{incomingInvite.senderUsername[0]}</Text>
+                </View>
+                <View>
+                  <Text style={styles.cardName}>{incomingInvite.senderUsername}</Text>
+                  <Text style={styles.cardDistance}>wants to run with you</Text>
+                </View>
+              </View>
+
+              <View style={styles.inviteActionsRow}>
+                <TouchableOpacity
+                  style={styles.declineButton}
+                  activeOpacity={0.8}
+                  onPress={() => respondToInvite(false)}
+                >
+                  <Text style={styles.declineText}>DECLINE</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.acceptButton}
+                  activeOpacity={0.8}
+                  onPress={() => respondToInvite(true)}
+                >
+                  <Text style={styles.inviteText}>ACCEPT</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
-        </GlassCard>
-      )}
+        )}
+      </Modal>
     </View>
   );
 };
@@ -1021,12 +1041,33 @@ const styles = StyleSheet.create({
     color: Colors.onPrimaryContainer,
     letterSpacing: 0.5,
   },
-  inviteCard: {
-    position: 'absolute',
-    top: 190,
-    left: Spacing.containerMargin,
-    right: Spacing.containerMargin,
-    zIndex: 40,
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: Colors.surfaceContainer,
+    borderTopLeftRadius: BorderRadius.xl,
+    borderTopRightRadius: BorderRadius.xl,
+    paddingHorizontal: Spacing.containerMargin,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xxl,
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.surfaceVariant,
+    alignSelf: 'center',
+    marginBottom: Spacing.lg,
+  },
+  modalTitle: {
+    fontSize: FontSize.labelCaps,
+    fontWeight: '700',
+    color: Colors.primaryContainer,
+    letterSpacing: 1,
+    marginBottom: Spacing.md,
   },
   inviteActionsRow: {
     flexDirection: 'row',

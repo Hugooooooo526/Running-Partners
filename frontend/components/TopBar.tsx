@@ -5,20 +5,28 @@ import { Colors, Spacing } from '../theme';
 interface TopBarProps {
   onMenuPress?: () => void;
   onNotificationsPress?: () => void;
+  hasNotifications?: boolean;
 }
 
-const TopBar: React.FC<TopBarProps> = ({ onMenuPress, onNotificationsPress }) => {
+const TopBar: React.FC<TopBarProps> = ({
+  onMenuPress,
+  onNotificationsPress,
+  hasNotifications,
+}) => {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>RUNNING PARTNERS</Text>
 
-      <TouchableOpacity
-        style={styles.iconButton}
-        onPress={onNotificationsPress}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.icon}>🔔</Text>
-      </TouchableOpacity>
+      <View style={styles.notificationWrap}>
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={onNotificationsPress}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.icon}>🔔</Text>
+        </TouchableOpacity>
+        {hasNotifications && <View style={styles.badge} />}
+      </View>
     </View>
   );
 };
@@ -39,6 +47,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.containerMargin,
     paddingTop: 40,
+  },
+  notificationWrap: {
+    position: 'relative',
+  },
+  badge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#ff4d4d',
+    borderWidth: 1.5,
+    borderColor: '#121317',
   },
   iconButton: {
     width: 40,

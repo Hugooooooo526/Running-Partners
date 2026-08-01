@@ -386,8 +386,12 @@ const ProfileScreen: React.FC = () => {
                 onRunnerPress={() => {}}
                 onMapPress={() => {}}
                 userLocation={null}
-                route={null}
-                path={selectedRun.path.length > 0 ? selectedRun.path : [selectedRun.start, selectedRun.end]}
+                route={
+                  selectedRun.path.length >= 3
+                    ? null
+                    : { start: selectedRun.start, end: selectedRun.end }
+                }
+                path={selectedRun.path.length >= 3 ? selectedRun.path : undefined}
               />
             </View>
 
@@ -413,14 +417,6 @@ const ProfileScreen: React.FC = () => {
                 <Text style={styles.modalStatLabel}>KM/H</Text>
               </View>
             </View>
-
-            {selectedRun.path.length === 0 && (
-              <View style={styles.pathWarning}>
-                <Text style={styles.pathWarningText}>
-                  ⚠️ No GPS path recorded — showing straight line from start to end
-                </Text>
-              </View>
-            )}
 
             <View style={styles.modalStatsSecondary}>
               <View style={styles.modalStat}>
