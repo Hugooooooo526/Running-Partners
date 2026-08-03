@@ -53,6 +53,10 @@ export const Colors = {
   inverseSurface: '#e3e2e7',
   inverseOnSurface: '#2f3034',
   surfaceTint: '#abd600',
+
+  matchGreat: '#c3f400',
+  matchFair: '#FFC107',
+  matchPoor: '#ff4d4d',
 };
 
 export const Spacing = {

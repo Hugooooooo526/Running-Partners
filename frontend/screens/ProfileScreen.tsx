@@ -17,6 +17,7 @@ import { fetchRunHistory } from '../services/runService';
 import { RunHistoryEntry } from '../types';
 import LineChart, { ChartPoint } from '../components/LineChart';
 import { estimatePaceKmh, estimateCaloriesKcal, estimateAvgBpm } from '../utils/runEstimates';
+import { getRunAnalysis } from '../utils/runAnalysis';
 
 function formatJogTime(totalMinutes?: number): string {
   if (totalMinutes == null) return '--';
@@ -199,6 +200,20 @@ const ProfileScreen: React.FC = () => {
   const selectedRunMetrics = useMemo(
     () => (selectedRun ? runMetrics(selectedRun) : null),
     [selectedRun]
+  );
+
+  const selectedRunAnalysis = useMemo(
+    () =>
+      selectedRun && selectedRunMetrics
+        ? getRunAnalysis({
+            distanceKm: selectedRun.distanceKm,
+            durationMinutes: selectedRun.durationMinutes,
+            paceKmh: selectedRunMetrics.paceKmh,
+            bpm: selectedRunMetrics.bpm,
+            kcal: selectedRunMetrics.kcal,
+          })
+        : null,
+    [selectedRun, selectedRunMetrics]
   );
 
   const dashboardCards: MetricCardProps[] = [
@@ -441,6 +456,18 @@ const ProfileScreen: React.FC = () => {
                 <Text style={styles.modalStatLabel}>DATE</Text>
               </View>
             </View>
+
+            {selectedRunAnalysis && (
+              <View style={styles.aiCoachCard}>
+                <Text style={styles.aiCoachLabel}>✨ AI COACH</Text>
+                <Text style={styles.aiCoachHeadline}>{selectedRunAnalysis.headline}</Text>
+                {selectedRunAnalysis.notes.map((note, index) => (
+                  <Text key={index} style={styles.aiCoachNote}>
+                    {note}
+                  </Text>
+                ))}
+              </View>
+            )}
           </View>
         )}
       </Modal>
@@ -711,6 +738,34 @@ const styles = StyleSheet.create({
     color: Colors.onSurfaceVariant,
     letterSpacing: 0.5,
     marginTop: 4,
+  },
+  aiCoachCard: {
+    marginHorizontal: Spacing.containerMargin,
+    marginBottom: Spacing.lg,
+    padding: Spacing.md,
+    backgroundColor: 'rgba(195, 244, 0, 0.08)',
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(195, 244, 0, 0.25)',
+  },
+  aiCoachLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.primaryContainer,
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  aiCoachHeadline: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.primary,
+    marginBottom: 4,
+  },
+  aiCoachNote: {
+    fontSize: 12,
+    color: Colors.onSurfaceVariant,
+    marginTop: 2,
+    lineHeight: 16,
   },
   logButton: {
     flexDirection: 'row',

@@ -24,6 +24,7 @@ import { supabase } from '../services/supabaseClient';
 import { completeRun } from '../services/runService';
 import { getDistanceKm, formatDistanceKm } from '../utils/distance';
 import { randomRunMetrics } from '../utils/runEstimates';
+import { computeMatchScore, getMatchColor, getMatchSummary } from '../utils/matchQuality';
 
 interface RemoteRunner {
   id: string;
@@ -147,7 +148,7 @@ function formatJogTime(totalMinutes?: number): string {
 }
 
 const HomeScreen: React.FC = () => {
-  const { session } = useAuth();
+  const { session, profile } = useAuth();
   const { location: userLocation, errorMsg: locationErrorMsg } = useLocation();
   const [isOnline, setIsOnline] = useState(false);
   const [selectedRunnerId, setSelectedRunnerId] = useState<string | null>(null);
@@ -594,6 +595,38 @@ const HomeScreen: React.FC = () => {
 
   const selectedRunner = runners.find((r) => r.id === selectedRunnerId) ?? null;
 
+  const matchScore = selectedRunner
+    ? computeMatchScore(
+        {
+          avgPace: profile?.avg_pace ?? null,
+          avgDistanceKm: profile?.avg_distance_km ?? null,
+          avgJogMinutes: profile?.avg_jog_minutes ?? null,
+        },
+        {
+          avgPace: selectedRunner.avgPace,
+          avgDistanceKm: selectedRunner.avgDistanceKm,
+          avgJogMinutes: selectedRunner.avgJogMinutes,
+        }
+      )
+    : null;
+  const matchColor = matchScore != null ? getMatchColor(matchScore) : null;
+  const matchSummary =
+    matchScore != null && selectedRunner
+      ? getMatchSummary(
+          {
+            avgPace: profile?.avg_pace ?? null,
+            avgDistanceKm: profile?.avg_distance_km ?? null,
+            avgJogMinutes: profile?.avg_jog_minutes ?? null,
+          },
+          {
+            avgPace: selectedRunner.avgPace,
+            avgDistanceKm: selectedRunner.avgDistanceKm,
+            avgJogMinutes: selectedRunner.avgJogMinutes,
+          },
+          matchScore
+        )
+      : null;
+
   const handleRunnerPress = (id: string) => {
     setSelectedRunnerId(id);
   };
@@ -991,7 +1024,20 @@ const HomeScreen: React.FC = () => {
                 </Text>
               </View>
             </View>
+            {matchScore != null && matchColor && (
+              <View style={styles.matchBadge}>
+                <View
+                  style={[
+                    styles.matchBadgeDot,
+                    { backgroundColor: matchColor, shadowColor: matchColor },
+                  ]}
+                />
+                <Text style={styles.matchBadgeText}>{matchScore}% MATCH</Text>
+              </View>
+            )}
           </View>
+
+          {matchSummary ? <Text style={styles.matchSummaryText}>✨ {matchSummary}</Text> : null}
 
           <View style={styles.runnerStatsRow}>
             <View style={styles.runnerStat}>
@@ -1169,6 +1215,36 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.onSurface,
     letterSpacing: 0.5,
+  },
+  matchBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceContainerHigh,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.surfaceVariant,
+    gap: 6,
+  },
+  matchBadgeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 8,
+  },
+  matchBadgeText: {
+    fontSize: FontSize.labelCaps,
+    fontWeight: '700',
+    color: Colors.onSurface,
+    letterSpacing: 0.5,
+  },
+  matchSummaryText: {
+    fontSize: FontSize.bodyMd,
+    color: Colors.onSurfaceVariant,
+    marginTop: Spacing.sm,
   },
   bottomCard: {
     position: 'absolute',
