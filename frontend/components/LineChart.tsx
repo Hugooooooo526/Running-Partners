@@ -12,7 +12,6 @@ interface LineChartProps {
   series: ChartPoint[];
   color?: string;
   height?: number;
-  formatValue?: (value: number) => string;
 }
 
 const PAD_TOP = 20;
@@ -40,7 +39,6 @@ const LineChart: React.FC<LineChartProps> = ({
   series,
   color = Colors.primaryContainer,
   height = 110,
-  formatValue = (v) => String(v),
 }) => {
   const [width, setWidth] = useState(0);
 
@@ -102,8 +100,6 @@ const LineChart: React.FC<LineChartProps> = ({
 
   const firstLabel = series[0].label;
   const lastLabel = series[series.length - 1].label;
-  const topValue = max;
-  const bottomValue = min;
 
   return (
     <View style={[styles.container, { height }]} onLayout={onLayout}>
@@ -115,27 +111,6 @@ const LineChart: React.FC<LineChartProps> = ({
           {points.map((p, i) => (
             <Circle key={i} cx={p.x} cy={p.y} r={3} fill={Colors.surface} stroke={color} strokeWidth={2} />
           ))}
-
-          <SvgText
-            x={PAD_SIDE}
-            y={PAD_TOP - 6}
-            fill={Colors.onSurfaceVariant}
-            fontSize={9}
-            fontWeight="600"
-            opacity={0.7}
-          >
-            {formatValue(topValue)}
-          </SvgText>
-          <SvgText
-            x={PAD_SIDE}
-            y={PAD_TOP + innerHeight + 14}
-            fill={Colors.onSurfaceVariant}
-            fontSize={9}
-            fontWeight="600"
-            opacity={0.7}
-          >
-            {formatValue(bottomValue)}
-          </SvgText>
 
           <SvgText
             x={PAD_SIDE}

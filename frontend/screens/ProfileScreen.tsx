@@ -81,16 +81,25 @@ const MetricCard: React.FC<MetricCardProps> = ({
   series,
   formatValue,
 }) => {
+  const values = series.map((p) => p.value);
+  const minValue = values.length ? Math.min(...values) : null;
+  const maxValue = values.length ? Math.max(...values) : null;
+
   return (
     <View style={styles.metricCard}>
       <View style={styles.metricHeader}>
         <Text style={styles.metricLabel}>{label}</Text>
+        {minValue != null && maxValue != null && (
+          <Text style={styles.metricMinMax}>
+            {formatValue(minValue)} – {formatValue(maxValue)}
+          </Text>
+        )}
       </View>
       <View style={styles.metricValueRow}>
         <Text style={styles.metricValue}>{value}</Text>
         {subtitle && <Text style={styles.metricSubtitle}>{subtitle}</Text>}
       </View>
-      <LineChart series={series} formatValue={formatValue} />
+      <LineChart series={series} />
     </View>
   );
 };
@@ -563,6 +572,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: Colors.primaryContainer,
     opacity: 0.4,
+  },
+  metricMinMax: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Colors.onSurfaceVariant,
+    opacity: 0.7,
   },
   metricValueRow: {
     flexDirection: 'row',

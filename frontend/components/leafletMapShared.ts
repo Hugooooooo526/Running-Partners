@@ -98,6 +98,14 @@ export const MAP_HTML = `
       border: 3px solid #ffffff;
       box-shadow: 0 0 0 4px rgba(66, 133, 244, 0.3), 0 2px 6px rgba(0,0,0,0.4);
     }
+    .runner-location-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #c3f400;
+      border: 2px solid #1a1a1a;
+      box-shadow: 0 0 0 3px rgba(195, 244, 0, 0.25), 0 2px 4px rgba(0,0,0,0.4);
+    }
     .route-pin-dot {
       width: 22px;
       height: 22px;
@@ -136,8 +144,6 @@ ${HOST_BRIDGE_SHIM}
       postToHost(JSON.stringify({ type: 'mapPress', lat: e.latlng.lat, lng: e.latlng.lng }));
     });
 
-    var markers = {};
-
     function onRunnerClick(id) {
       postToHost(JSON.stringify({ type: 'runnerPress', id: id }));
     }
@@ -163,18 +169,105 @@ ${HOST_BRIDGE_SHIM}
       }
     };
 
-    window.renderMarkers = function(runnersData, selectedId) {
-      Object.keys(markers).forEach(function(id) {
-        map.removeLayer(markers[id]);
-        delete markers[id];
+    // Runners that are close together on screen would otherwise stack their
+    // avatar+name badges on top of each other. Each runner gets a small dot
+    // pinned at its exact coordinate; the badge itself is nudged apart from
+    // other nearby badges (in screen-pixel space) and, when nudged, gets a
+    // thin leader line pointing back to its dot.
+    var runnerDots = {};
+    var runnerBadges = {};
+    var runnerLines = {};
+    var lastRunnersData = [];
+    var lastSelectedId = null;
+    var BADGE_COLLISION_PX = 60;
+
+    function clearRunnerLayers() {
+      Object.keys(runnerDots).forEach(function(id) { map.removeLayer(runnerDots[id]); });
+      Object.keys(runnerBadges).forEach(function(id) { map.removeLayer(runnerBadges[id]); });
+      Object.keys(runnerLines).forEach(function(id) { map.removeLayer(runnerLines[id]); });
+      runnerDots = {};
+      runnerBadges = {};
+      runnerLines = {};
+    }
+
+    // Groups runners whose screen positions are within BADGE_COLLISION_PX of
+    // each other (union-find), then fans each group's badges evenly around
+    // their shared centroid so they no longer overlap.
+    function resolveBadgePositions(runnersData) {
+      var points = runnersData.map(function(runner) {
+        var latlng = L.latLng(runner.latitude, runner.longitude);
+        return { runner: runner, latlng: latlng, pixel: map.latLngToContainerPoint(latlng) };
       });
 
-      runnersData.forEach(function(runner) {
-        var isSelected = runner.id === selectedId;
+      var parent = points.map(function(_, i) { return i; });
+      function find(i) { while (parent[i] !== i) { i = parent[i]; } return i; }
+      function union(a, b) { var ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+
+      for (var i = 0; i < points.length; i++) {
+        for (var j = i + 1; j < points.length; j++) {
+          var dx = points[i].pixel.x - points[j].pixel.x;
+          var dy = points[i].pixel.y - points[j].pixel.y;
+          if (Math.sqrt(dx * dx + dy * dy) < BADGE_COLLISION_PX) {
+            union(i, j);
+          }
+        }
+      }
+
+      var clusters = {};
+      points.forEach(function(_, idx) {
+        var root = find(idx);
+        if (!clusters[root]) clusters[root] = [];
+        clusters[root].push(idx);
+      });
+
+      var result = {};
+      Object.keys(clusters).forEach(function(root) {
+        var members = clusters[root];
+        if (members.length === 1) {
+          var solo = points[members[0]];
+          result[solo.runner.id] = { latlng: solo.latlng, offset: false };
+          return;
+        }
+
+        var cx = 0, cy = 0;
+        members.forEach(function(idx) { cx += points[idx].pixel.x; cy += points[idx].pixel.y; });
+        cx /= members.length;
+        cy /= members.length;
+
+        var radius = Math.min(40 + members.length * 10, 90);
+        members.forEach(function(idx, order) {
+          var angle = (order / members.length) * 2 * Math.PI;
+          var point = L.point(cx + radius * Math.cos(angle), cy + radius * Math.sin(angle));
+          result[points[idx].runner.id] = { latlng: map.containerPointToLatLng(point), offset: true };
+        });
+      });
+
+      return result;
+    }
+
+    function redrawRunnerMarkers() {
+      clearRunnerLayers();
+      if (!lastRunnersData.length) return;
+
+      var positions = resolveBadgePositions(lastRunnersData);
+
+      lastRunnersData.forEach(function(runner) {
+        var trueLatLng = L.latLng(runner.latitude, runner.longitude);
+
+        var dotIcon = L.divIcon({
+          className: 'runner-location-marker',
+          html: '<div class="runner-location-dot"></div>',
+          iconSize: [0, 0],
+          iconAnchor: [6, 6]
+        });
+        runnerDots[runner.id] = L.marker(trueLatLng, { icon: dotIcon, zIndexOffset: 400 }).addTo(map);
+
+        var pos = positions[runner.id] || { latlng: trueLatLng, offset: false };
+        var isSelected = runner.id === lastSelectedId;
         var avatarClass = isSelected ? 'runner-avatar selected' : 'runner-avatar';
         var initial = runner.username.charAt(0).toUpperCase();
 
-        var icon = L.divIcon({
+        var badgeIcon = L.divIcon({
           className: 'runner-marker',
           html: '<div class="' + avatarClass + '" onclick="event.stopPropagation(); onRunnerClick(\\'' + runner.id + '\\')">' + initial + '</div>' +
                 '<div class="runner-label">' + runner.username.toUpperCase() + '</div>',
@@ -182,12 +275,33 @@ ${HOST_BRIDGE_SHIM}
           iconAnchor: [0, 0]
         });
 
-        var marker = L.marker([runner.latitude, runner.longitude], { icon: icon }).addTo(map);
-        marker.on('click', function(e) {
+        var badgeMarker = L.marker(pos.latlng, {
+          icon: badgeIcon,
+          zIndexOffset: isSelected ? 1000 : 600
+        }).addTo(map);
+        badgeMarker.on('click', function(e) {
           L.DomEvent.stopPropagation(e);
         });
-        markers[runner.id] = marker;
+        runnerBadges[runner.id] = badgeMarker;
+
+        if (pos.offset) {
+          runnerLines[runner.id] = L.polyline([trueLatLng, pos.latlng], {
+            color: '#c3f400',
+            weight: 2,
+            opacity: 0.55,
+            dashArray: '3, 5'
+          }).addTo(map);
+        }
       });
+    }
+
+    map.on('zoomend', redrawRunnerMarkers);
+    map.on('moveend', redrawRunnerMarkers);
+
+    window.renderMarkers = function(runnersData, selectedId) {
+      lastRunnersData = runnersData;
+      lastSelectedId = selectedId;
+      redrawRunnerMarkers();
     };
 
     var routeLayer = null;
